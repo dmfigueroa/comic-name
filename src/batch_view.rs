@@ -153,20 +153,11 @@ impl BatchView {
         controls.append(&remove_button);
         align_content.append(&controls);
 
-        let removed_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .build();
-        removed_box.append(&list_scroller(&removed_list, 90));
         let restore_button = gtk::Button::builder()
             .label("Restore Selected Files")
             .halign(gtk::Align::Start)
             .build();
-        removed_box.append(&restore_button);
-        let removed_expander = gtk::Expander::builder()
-            .label("Removed files")
-            .child(&removed_box)
-            .build();
+        let removed_expander = removed_files_expander(&removed_list, &restore_button);
         align_content.append(&removed_expander);
         align_content.append(&review_button);
 
@@ -721,6 +712,22 @@ fn batch_scroll_adjustment() -> gtk::Adjustment {
     gtk::Adjustment::new(0.0, 0.0, 0.0, 1.0, 10.0, 0.0)
 }
 
+fn removed_files_expander(
+    removed_list: &gtk::ListBox,
+    restore_button: &gtk::Button,
+) -> adw::ExpanderRow {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .build();
+    content.append(&list_scroller(removed_list, 90));
+    content.append(restore_button);
+
+    let row = adw::ExpanderRow::builder().title("Removed files").build();
+    row.add_row(&content);
+    row
+}
+
 fn page_content() -> gtk::Box {
     gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -801,6 +808,10 @@ mod tests {
         let choices = DataList::new();
         let content = gtk::Label::new(Some("Series results"));
         let shell = WorkflowPageShell::new("Choose Series", &content, "Open Another Folder");
+        let removed_list = gtk::ListBox::new();
+        let restore_button = gtk::Button::with_label("Restore Selected Files");
+        let removed_files: adw::ExpanderRow =
+            removed_files_expander(&removed_list, &restore_button);
 
         assert!(adjustment.lower() + adjustment.page_size() <= adjustment.upper());
         let selection = choices
@@ -814,5 +825,8 @@ mod tests {
             Some("Open Another Folder")
         );
         assert_eq!(shell.clamp().maximum_size(), 960);
+        assert_eq!(removed_files.title(), "Removed files");
+        assert!(removed_list.is_ancestor(&removed_files));
+        assert!(restore_button.is_ancestor(&removed_files));
     }
 }

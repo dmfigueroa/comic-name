@@ -24,6 +24,7 @@ mod batch_view;
 mod comic;
 mod comic_vine;
 mod config;
+mod list_view;
 mod single_view;
 mod window;
 

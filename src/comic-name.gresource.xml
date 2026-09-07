@@ -2,6 +2,7 @@
 <gresources>
   <gresource prefix="/com/dmfigueroa/ComicName">
     <file preprocess="xml-stripblanks">window.ui</file>
+    <file preprocess="xml-stripblanks">data-row.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
   </gresource>
 </gresources>

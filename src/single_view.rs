@@ -8,6 +8,7 @@ use gtk::glib;
 
 use crate::comic::{rename_matched, ComicFile, ComicMatch};
 use crate::comic_vine::{self, Issue, Volume};
+use crate::list_view::DataList;
 use crate::window::ComicNameWindow;
 
 #[derive(Debug)]
@@ -15,8 +16,8 @@ pub struct SingleView {
     root: gtk::ScrolledWindow,
     search_entry: gtk::SearchEntry,
     search_button: gtk::Button,
-    series_list: gtk::ListBox,
-    issue_list: gtk::ListBox,
+    series_list: DataList,
+    issue_list: DataList,
     preview_label: gtk::Label,
     rename_button: gtk::Button,
     file: RefCell<ComicFile>,
@@ -34,14 +35,8 @@ impl SingleView {
             .build();
         let search_button = gtk::Button::builder().label("Search").build();
         search_button.add_css_class("suggested-action");
-        let series_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["boxed-list"])
-            .build();
-        let issue_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["boxed-list"])
-            .build();
+        let series_list = DataList::new();
+        let issue_list = DataList::new();
         let preview_label = gtk::Label::builder()
             .label("Select a series, then choose one issue.")
             .xalign(0.0)
@@ -89,9 +84,9 @@ impl SingleView {
         search_row.append(&search_button);
         content.append(&search_row);
         content.append(&section_label("1. CHOOSE A COMICVINE SERIES"));
-        content.append(&list_scroller(&series_list, 170));
+        content.append(&list_scroller(&series_list.view, 170));
         content.append(&section_label("2. CHOOSE ONE ISSUE"));
-        content.append(&list_scroller(&issue_list, 220));
+        content.append(&list_scroller(&issue_list.view, 220));
         content.append(&preview_label);
         content.append(&rename_button);
 
@@ -146,23 +141,33 @@ impl SingleView {
 
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
-        self.series_list.connect_row_selected(move |_, row| {
-            if let (Some(view), Some(window), Some(row)) =
-                (weak_self.upgrade(), weak_window.upgrade(), row)
-            {
-                view.select_volume(row.index() as usize, &window);
-            }
-        });
+        self.series_list
+            .single_selection
+            .as_ref()
+            .expect("series list uses single selection")
+            .connect_selected_notify(move |selection| {
+                if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
+                    let index = selection.selected();
+                    if index != gtk::INVALID_LIST_POSITION {
+                        view.select_volume(index as usize, &window);
+                    }
+                }
+            });
 
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
-        self.issue_list.connect_row_selected(move |_, row| {
-            if let (Some(view), Some(window), Some(row)) =
-                (weak_self.upgrade(), weak_window.upgrade(), row)
-            {
-                view.select_issue(row.index() as usize, &window);
-            }
-        });
+        self.issue_list
+            .single_selection
+            .as_ref()
+            .expect("issue list uses single selection")
+            .connect_selected_notify(move |selection| {
+                if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
+                    let index = selection.selected();
+                    if index != gtk::INVALID_LIST_POSITION {
+                        view.select_issue(index as usize, &window);
+                    }
+                }
+            });
 
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
@@ -181,10 +186,9 @@ impl SingleView {
         self.issues.borrow_mut().clear();
         self.selected_volume.replace(None);
         self.clear_assignment();
-        clear_list(&self.series_list);
-        clear_list(&self.issue_list);
-        self.series_list
-            .append(&status_label("Searching ComicVine..."));
+        self.series_list.clear();
+        self.issue_list.clear();
+        self.series_list.append("Searching ComicVine...", None);
 
         let api_key = window.api_key();
         let query = self.search_entry.text().to_string();
@@ -226,14 +230,15 @@ impl SingleView {
 
     fn finish_search(&self, result: anyhow::Result<Vec<Volume>>, window: &ComicNameWindow) {
         self.search_button.set_sensitive(true);
-        clear_list(&self.series_list);
+        self.series_list.clear();
         match result {
             Ok(volumes) if volumes.is_empty() => {
-                self.series_list.append(&status_label("No series found"));
+                self.series_list.append("No series found", None);
             }
             Ok(volumes) => {
                 for volume in &volumes {
-                    self.series_list.append(&volume_row(volume));
+                    self.series_list
+                        .append(&volume.name, Some(&volume_subtitle(volume)));
                 }
                 self.volumes.replace(volumes);
             }
@@ -248,8 +253,8 @@ impl SingleView {
         self.selected_volume.replace(Some(volume.clone()));
         self.issues.borrow_mut().clear();
         self.clear_assignment();
-        clear_list(&self.issue_list);
-        self.issue_list.append(&status_label("Loading issues..."));
+        self.issue_list.clear();
+        self.issue_list.append("Loading issues...", None);
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
 
@@ -296,14 +301,15 @@ impl SingleView {
     }
 
     fn finish_issues(&self, result: anyhow::Result<Vec<Issue>>, window: &ComicNameWindow) {
-        clear_list(&self.issue_list);
+        self.issue_list.clear();
         match result {
             Ok(issues) if issues.is_empty() => {
-                self.issue_list.append(&status_label("No issues found"));
+                self.issue_list.append("No issues found", None);
             }
             Ok(issues) => {
                 for issue in &issues {
-                    self.issue_list.append(&issue_row(issue));
+                    self.issue_list
+                        .append(&issue_title(issue), Some(&issue_subtitle(issue)));
                 }
                 self.issues.replace(issues);
             }
@@ -399,7 +405,7 @@ fn section_label(text: &str) -> gtk::Label {
     label
 }
 
-fn list_scroller(list: &gtk::ListBox, minimum_height: i32) -> gtk::ScrolledWindow {
+fn list_scroller(list: &gtk::ListView, minimum_height: i32) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .min_content_height(minimum_height)
         .vexpand(true)
@@ -407,7 +413,7 @@ fn list_scroller(list: &gtk::ListBox, minimum_height: i32) -> gtk::ScrolledWindo
         .build()
 }
 
-fn volume_row(volume: &Volume) -> adw::ActionRow {
+fn volume_subtitle(volume: &Volume) -> String {
     let year = volume
         .start_year
         .map_or_else(|| "Unknown year".into(), |year| year.to_string());
@@ -416,34 +422,17 @@ fn volume_row(volume: &Volume) -> adw::ActionRow {
         .as_ref()
         .map(|publisher| publisher.name.as_str())
         .unwrap_or("Unknown publisher");
-    data_row(&volume.name, Some(&format!("{publisher} ({year})")))
+    format!("{publisher} ({year})")
 }
 
-fn issue_row(issue: &Issue) -> adw::ActionRow {
+fn issue_title(issue: &Issue) -> String {
     let title = issue.name.as_deref().unwrap_or("Untitled issue");
-    let date = issue.release_date().unwrap_or("Unknown release date");
-    data_row(&format!("#{} - {title}", issue.issue_number), Some(date))
+    format!("#{} - {title}", issue.issue_number)
 }
 
-fn data_row(title: &str, subtitle: Option<&str>) -> adw::ActionRow {
-    let title = glib::markup_escape_text(title);
-    let row = adw::ActionRow::builder().title(title).build();
-    if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.is_empty()) {
-        row.set_subtitle(&glib::markup_escape_text(subtitle));
-    }
-    row
-}
-
-fn status_label(text: &str) -> gtk::Label {
-    gtk::Label::builder()
-        .label(text)
-        .margin_top(12)
-        .margin_bottom(12)
-        .build()
-}
-
-fn clear_list(list: &gtk::ListBox) {
-    while let Some(child) = list.first_child() {
-        list.remove(&child);
-    }
+fn issue_subtitle(issue: &Issue) -> String {
+    issue
+        .release_date()
+        .unwrap_or("Unknown release date")
+        .into()
 }

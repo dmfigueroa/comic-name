@@ -11,6 +11,7 @@ use gtk::glib;
 use crate::alignment::BatchAlignment;
 use crate::comic::{rename_matched, ComicFile};
 use crate::comic_vine::{self, Issue, Volume};
+use crate::list_view::DataList;
 use crate::window::ComicNameWindow;
 
 #[derive(Debug)]
@@ -18,9 +19,9 @@ pub struct BatchView {
     root: gtk::ScrolledWindow,
     search_entry: gtk::SearchEntry,
     search_button: gtk::Button,
-    series_list: gtk::ListBox,
-    file_list: gtk::ListBox,
-    issue_list: gtk::ListBox,
+    series_list: DataList,
+    file_list: DataList,
+    issue_list: DataList,
     removed_list: gtk::ListBox,
     preview_list: gtk::ListBox,
     rename_button: gtk::Button,
@@ -44,18 +45,9 @@ impl BatchView {
             .build();
         let search_button = gtk::Button::builder().label("Search").build();
         search_button.add_css_class("suggested-action");
-        let series_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["boxed-list"])
-            .build();
-        let file_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Multiple)
-            .css_classes(["boxed-list"])
-            .build();
-        let issue_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["boxed-list"])
-            .build();
+        let series_list = DataList::new();
+        let file_list = DataList::multi();
+        let issue_list = DataList::none();
         let removed_list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Multiple)
             .css_classes(["boxed-list"])
@@ -103,31 +95,25 @@ impl BatchView {
         search_row.append(&search_button);
         content.append(&search_row);
         content.append(&section_label("1. CHOOSE ONE COMICVINE SERIES"));
-        content.append(&list_scroller(&series_list, 125));
+        content.append(&list_scroller(&series_list.view, 125));
         content.append(&section_label(
             "2. ALIGN LOCAL FILES WITH THE FIXED COMICVINE ISSUE LIST",
         ));
 
-        let file_adjustment = batch_scroll_adjustment();
-        let issue_adjustment = batch_scroll_adjustment();
-        file_adjustment
-            .bind_property("value", &issue_adjustment, "value")
-            .bidirectional()
-            .sync_create()
-            .build();
+        let shared_adjustment = batch_scroll_adjustment();
         let file_scroller = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .min_content_height(260)
             .min_content_width(330)
-            .vadjustment(&file_adjustment)
-            .child(&file_list)
+            .vadjustment(&shared_adjustment)
+            .child(&file_list.view)
             .build();
         let issue_scroller = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .min_content_height(260)
             .min_content_width(330)
-            .vadjustment(&issue_adjustment)
-            .child(&issue_list)
+            .vadjustment(&shared_adjustment)
+            .child(&issue_list.view)
             .build();
         let file_column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -252,13 +238,18 @@ impl BatchView {
 
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
-        self.series_list.connect_row_selected(move |_, row| {
-            if let (Some(view), Some(window), Some(row)) =
-                (weak_self.upgrade(), weak_window.upgrade(), row)
-            {
-                view.select_volume(row.index() as usize, &window);
-            }
-        });
+        self.series_list
+            .single_selection
+            .as_ref()
+            .expect("series list uses single selection")
+            .connect_selected_notify(move |selection| {
+                if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
+                    let index = selection.selected();
+                    if index != gtk::INVALID_LIST_POSITION {
+                        view.select_volume(index as usize, &window);
+                    }
+                }
+            });
 
         connect_alignment_button(self, window, up_button, |alignment, first, last| {
             alignment.move_up(first, last)
@@ -314,13 +305,12 @@ impl BatchView {
     }
 
     fn show_unaligned_files(&self) {
-        clear_list(&self.file_list);
-        clear_list(&self.issue_list);
+        self.file_list.clear();
+        self.issue_list.clear();
         clear_list(&self.removed_list);
         for file in &self.files {
-            self.file_list
-                .append(&data_row(&self.display_file(file), None));
-            self.issue_list.append(&data_row("", None));
+            self.file_list.append(&self.display_file(file), None);
+            self.issue_list.append("", None);
         }
         clear_list(&self.preview_list);
         self.preview_list
@@ -335,9 +325,8 @@ impl BatchView {
         self.selected_volume.replace(None);
         self.alignment.replace(None);
         self.rename_button.set_sensitive(false);
-        clear_list(&self.series_list);
-        self.series_list
-            .append(&status_label("Searching ComicVine..."));
+        self.series_list.clear();
+        self.series_list.append("Searching ComicVine...", None);
         self.show_unaligned_files();
 
         let api_key = window.api_key();
@@ -380,14 +369,15 @@ impl BatchView {
 
     fn finish_search(&self, result: anyhow::Result<Vec<Volume>>, window: &ComicNameWindow) {
         self.search_button.set_sensitive(true);
-        clear_list(&self.series_list);
+        self.series_list.clear();
         match result {
             Ok(volumes) if volumes.is_empty() => {
-                self.series_list.append(&status_label("No series found"));
+                self.series_list.append("No series found", None);
             }
             Ok(volumes) => {
                 for volume in &volumes {
-                    self.series_list.append(&volume_row(volume));
+                    self.series_list
+                        .append(&volume.name, Some(&volume_subtitle(volume)));
                 }
                 self.volumes.replace(volumes);
             }
@@ -403,8 +393,8 @@ impl BatchView {
         self.alignment.replace(None);
         self.rename_button.set_sensitive(false);
         self.show_unaligned_files();
-        clear_list(&self.issue_list);
-        self.issue_list.append(&status_label("Loading issues..."));
+        self.issue_list.clear();
+        self.issue_list.append("Loading issues...", None);
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
 
@@ -453,8 +443,8 @@ impl BatchView {
     fn finish_issues(&self, result: anyhow::Result<Vec<Issue>>, window: &ComicNameWindow) {
         match result {
             Ok(issues) if issues.is_empty() => {
-                clear_list(&self.issue_list);
-                self.issue_list.append(&status_label("No issues found"));
+                self.issue_list.clear();
+                self.issue_list.append("No issues found", None);
             }
             Ok(issues) => {
                 self.alignment
@@ -462,14 +452,14 @@ impl BatchView {
                 self.refresh_alignment(None);
             }
             Err(error) => {
-                clear_list(&self.issue_list);
+                self.issue_list.clear();
                 window.show_error(&format!("{error:#}"));
             }
         }
     }
 
     fn selected_file_range(&self, window: &ComicNameWindow) -> Option<(usize, usize)> {
-        let indices = selected_indices(&self.file_list);
+        let indices = self.file_list.selected_indices();
         if indices.is_empty() {
             window.show_error("Select one or more adjacent local files first");
             return None;
@@ -492,8 +482,8 @@ impl BatchView {
     }
 
     fn refresh_alignment(&self, selection: Option<Vec<usize>>) {
-        clear_list(&self.file_list);
-        clear_list(&self.issue_list);
+        self.file_list.clear();
+        self.issue_list.clear();
         clear_list(&self.removed_list);
         clear_list(&self.preview_list);
         let alignment = self.alignment.borrow();
@@ -506,10 +496,8 @@ impl BatchView {
                 .file(index)
                 .map(|file| self.display_file(file))
                 .unwrap_or_default();
-            self.file_list.append(&data_row(
-                if file_name.is_empty() { "" } else { &file_name },
-                None,
-            ));
+            self.file_list
+                .append(if file_name.is_empty() { "" } else { &file_name }, None);
             let issue = alignment.issue(index);
             let issue_title = issue
                 .map(|issue| {
@@ -522,10 +510,9 @@ impl BatchView {
                 .unwrap_or_default();
             if let Some(issue) = issue {
                 let issue_date = issue.release_date().unwrap_or("Unknown release date");
-                self.issue_list
-                    .append(&data_row(&issue_title, Some(issue_date)));
+                self.issue_list.append(&issue_title, Some(issue_date));
             } else {
-                self.issue_list.append(&data_row("", None));
+                self.issue_list.append("", None);
             }
         }
         for index in 0..alignment.removed_count() {
@@ -565,11 +552,7 @@ impl BatchView {
             .set_label(&format!("Review {} Renames", matches.len()));
 
         if let Some(indices) = selection {
-            for index in indices {
-                if let Some(row) = self.file_list.row_at_index(index as i32) {
-                    self.file_list.select_row(Some(&row));
-                }
-            }
+            self.file_list.select_indices(&indices);
         }
     }
 
@@ -689,7 +672,7 @@ fn column_label(text: &str) -> gtk::Label {
     label
 }
 
-fn list_scroller(list: &gtk::ListBox, minimum_height: i32) -> gtk::ScrolledWindow {
+fn list_scroller<W: IsA<gtk::Widget>>(list: &W, minimum_height: i32) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .min_content_height(minimum_height)
         .vexpand(true)
@@ -697,7 +680,7 @@ fn list_scroller(list: &gtk::ListBox, minimum_height: i32) -> gtk::ScrolledWindo
         .build()
 }
 
-fn volume_row(volume: &Volume) -> adw::ActionRow {
+fn volume_subtitle(volume: &Volume) -> String {
     let year = volume
         .start_year
         .map_or_else(|| "Unknown year".into(), |year| year.to_string());
@@ -706,7 +689,7 @@ fn volume_row(volume: &Volume) -> adw::ActionRow {
         .as_ref()
         .map(|publisher| publisher.name.as_str())
         .unwrap_or("Unknown publisher");
-    data_row(&volume.name, Some(&format!("{publisher} ({year})")))
+    format!("{publisher} ({year})")
 }
 
 fn data_row(title: &str, subtitle: Option<&str>) -> adw::ActionRow {
@@ -745,7 +728,9 @@ mod tests {
 
     #[test]
     fn batch_scroll_adjustment_starts_with_valid_bounds() {
-        gtk::init().expect("GTK must initialize for this test");
+        if !gtk::is_initialized() {
+            gtk::init().expect("GTK must initialize for this test");
+        }
         let adjustment = batch_scroll_adjustment();
 
         assert!(adjustment.lower() + adjustment.page_size() <= adjustment.upper());

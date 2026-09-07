@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="comic-name">
+	<schema id="com.dmfigueroa.ComicName" path="/com/dmfigueroa/ComicName/">
+		<key name="comic-vine-api-key" type="s">
+			<default>''</default>
+			<summary>ComicVine API key</summary>
+			<description>The API key used to search ComicVine.</description>
+		</key>
+	</schema>
+</schemalist>

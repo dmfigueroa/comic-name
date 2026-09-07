@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Comic-name
+Exec=comic-name
+Icon=com.dmfigueroa.ComicName
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true

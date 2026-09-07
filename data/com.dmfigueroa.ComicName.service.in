@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=com.dmfigueroa.ComicName
+Exec=@bindir@/comic-name --gapplication-service

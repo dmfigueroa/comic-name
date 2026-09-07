@@ -1,0 +1,6 @@
+# List of source files containing translatable strings.
+# Please keep this file sorted alphabetically.
+data/com.dmfigueroa.ComicName.desktop.in
+data/com.dmfigueroa.ComicName.metainfo.xml.in
+data/com.dmfigueroa.ComicName.gschema.xml
+src/window.ui

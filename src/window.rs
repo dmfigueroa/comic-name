@@ -101,7 +101,16 @@ impl ComicNameWindow {
         dialog.open(Some(self), None::<&gio::Cancellable>, move |result| {
             let Some(window) = weak.upgrade() else { return };
             match result {
-                Ok(file) => window.open_path(file.path()),
+                Ok(file) => {
+                    let path = portal_host_path(&file).or_else(|| file.path());
+                    eprintln!(
+                        "[DEBUG-rename-20260907] selected single file uri={} path={:?} basename={:?}",
+                        file.uri(),
+                        path,
+                        file.basename()
+                    );
+                    window.open_path(path)
+                }
                 Err(error) if error.matches(gtk::DialogError::Dismissed) => {}
                 Err(error) => window.show_error(&format!("{error:#}")),
             }
@@ -116,7 +125,7 @@ impl ComicNameWindow {
         dialog.select_folder(Some(self), None::<&gio::Cancellable>, move |result| {
             let Some(window) = weak.upgrade() else { return };
             match result {
-                Ok(folder) => window.open_path(folder.path()),
+                Ok(folder) => window.open_path(portal_host_path(&folder).or_else(|| folder.path())),
                 Err(error) if error.matches(gtk::DialogError::Dismissed) => {}
                 Err(error) => window.show_error(&format!("{error:#}")),
             }
@@ -193,6 +202,63 @@ fn comic_filter() -> gtk::FileFilter {
         filter.add_suffix(suffix);
     }
     filter
+}
+
+fn portal_host_path(file: &gio::File) -> Option<PathBuf> {
+    if let Some(path) = file
+        .query_info(
+            "xattr::user.document-portal.host-path",
+            gio::FileQueryInfoFlags::NONE,
+            None::<&gio::Cancellable>,
+        )
+        .ok()
+        .and_then(|info| info.attribute_byte_string("xattr::user.document-portal.host-path"))
+    {
+        return Some(PathBuf::from(path.as_str()));
+    }
+
+    let file_path = file.path()?;
+    let mut components = file_path.components();
+    let document_id = loop {
+        if components.next()?.as_os_str() == "doc" {
+            break components
+                .next()?
+                .as_os_str()
+                .to_string_lossy()
+                .into_owned();
+        }
+    };
+    let proxy = gio::DBusProxy::for_bus_sync(
+        gio::BusType::Session,
+        gio::DBusProxyFlags::NONE,
+        None,
+        "org.freedesktop.portal.Documents",
+        "/org/freedesktop/portal/documents",
+        "org.freedesktop.portal.Documents",
+        None::<&gio::Cancellable>,
+    )
+    .ok()?;
+    let parameters = glib::Variant::from((vec![document_id.clone()],));
+    let result = proxy
+        .call_sync(
+            "GetHostPaths",
+            Some(&parameters),
+            gio::DBusCallFlags::NONE,
+            -1,
+            None::<&gio::Cancellable>,
+        )
+        .ok()?;
+    let paths = result.child_value(0);
+    for index in 0..paths.n_children() {
+        let entry = paths.child_value(index);
+        if entry.child_value(0).get::<String>().as_deref() == Some(document_id.as_str()) {
+            let bytes = entry.child_value(1).get::<Vec<u8>>()?;
+            return Some(PathBuf::from(
+                String::from_utf8_lossy(&bytes).trim_end_matches('\0'),
+            ));
+        }
+    }
+    None
 }
 
 fn clear_box(container: &gtk::Box) {

@@ -161,6 +161,13 @@ pub fn rename_matched(files: &mut [ComicFile]) -> Result<usize> {
         .map(|(_, source, _)| source.clone())
         .collect::<HashSet<_>>();
     for (_, source, target) in &plans {
+        eprintln!(
+            "[DEBUG-rename-20260907] plan source={:?} target={:?} source_uri={} target_uri={}",
+            source,
+            target,
+            gio::File::for_path(source).uri(),
+            gio::File::for_path(target).uri()
+        );
         if !gio::File::for_path(source).query_exists(None::<&gio::Cancellable>) {
             bail!("{} no longer exists", source.display());
         }
@@ -213,12 +220,40 @@ pub fn rename_matched(files: &mut [ComicFile]) -> Result<usize> {
 }
 
 fn rename_no_replace(source: &Path, target: &Path) -> std::result::Result<(), gtk::glib::Error> {
-    gio::File::for_path(source).move_(
-        &gio::File::for_path(target),
-        gio::FileCopyFlags::NONE,
-        None::<&gio::Cancellable>,
-        None,
-    )
+    let target_name = target
+        .file_name()
+        .expect("rename target must have a file name")
+        .to_string_lossy();
+    let source_file = gio::File::for_path(source);
+    eprintln!(
+        "[DEBUG-rename-20260907] set_display_name source={:?} source_uri={} target_name={:?}",
+        source,
+        source_file.uri(),
+        target_name
+    );
+    let result = source_file
+        .set_display_name(&target_name, None::<&gio::Cancellable>)
+        .map(|renamed| {
+            eprintln!(
+                "[DEBUG-rename-20260907] rename result_uri={} result_path={:?}",
+                renamed.uri(),
+                renamed.path()
+            );
+        });
+    eprintln!(
+        "[DEBUG-rename-20260907] after source_exists={} target_exists={} parent_entries={:?}",
+        source_file.query_exists(None::<&gio::Cancellable>),
+        gio::File::for_path(target).query_exists(None::<&gio::Cancellable>),
+        source
+            .parent()
+            .and_then(|parent| fs::read_dir(parent).ok())
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+                    .collect::<Vec<_>>()
+            })
+    );
+    result.map(|_| ())
 }
 
 #[cfg(test)]
@@ -318,6 +353,12 @@ mod tests {
             "Batman (2014) #1 (October 2014).cbz"
         );
         assert!(files[0].path.exists());
+        let entries = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, vec!["Batman (2014) #1 (October 2014).cbz"]);
+        assert_eq!(fs::read(files[0].path.clone()).unwrap(), b"comic");
 
         fs::remove_dir_all(directory).unwrap();
     }

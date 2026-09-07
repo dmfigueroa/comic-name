@@ -10,6 +10,7 @@
     "finish-args" : [
         "--share=network",
         "--share=ipc",
+        "--filesystem=home",
         "--socket=fallback-x11",
         "--device=dri",
         "--socket=wayland"

@@ -710,9 +710,10 @@ fn volume_row(volume: &Volume) -> adw::ActionRow {
 }
 
 fn data_row(title: &str, subtitle: Option<&str>) -> adw::ActionRow {
+    let title = glib::markup_escape_text(title);
     let row = adw::ActionRow::builder().title(title).build();
     if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.is_empty()) {
-        row.set_subtitle(subtitle);
+        row.set_subtitle(&glib::markup_escape_text(subtitle));
     }
     row
 }

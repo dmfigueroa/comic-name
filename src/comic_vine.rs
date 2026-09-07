@@ -26,6 +26,13 @@ pub struct Issue {
     pub issue_number: String,
     pub name: Option<String>,
     pub cover_date: Option<String>,
+    pub store_date: Option<String>,
+}
+
+impl Issue {
+    pub fn release_date(&self) -> Option<&str> {
+        self.cover_date.as_deref().or(self.store_date.as_deref())
+    }
 }
 
 #[derive(Deserialize)]
@@ -83,7 +90,7 @@ pub fn issues_for_volume(api_key: &str, volume_id: u64) -> Result<Vec<Issue>> {
             .query("api_key", api_key.trim())
             .query("format", "json")
             .query("filter", &format!("volume:{volume_id}"))
-            .query("field_list", "id,issue_number,name,cover_date")
+            .query("field_list", "id,issue_number,name,cover_date,store_date")
             .query("limit", "100")
             .query("offset", &offset)
             .call()
@@ -246,6 +253,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(volume.start_year, Some(2014));
+    }
+
+    #[test]
+    fn issue_store_date_is_supported_as_a_release_date() {
+        let issue: Issue = serde_json::from_str(
+            r#"{"id":2,"issue_number":"1","name":null,"cover_date":null,"store_date":"2014-10-15"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(issue.release_date(), Some("2014-10-15"));
     }
 
     #[test]

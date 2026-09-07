@@ -3,9 +3,11 @@
 Comic Name is a GNOME app for explicitly matching comic archives and PDFs to
 ComicVine issues, reviewing the resulting names, and renaming consistently:
 
-`Series (Volume Year) Annual #Issue (Cover Month Cover Year).cbz`
+`Series (Volume Year) Annual #Issue (Release Month Release Year).cbz`
 
-For example: `Batman (2014) #1 (October 2014).cbz`.
+For example: `Batman (2014) #1 (October 2014).cbz`. ComicVine's cover date is
+preferred, its in-store date is used when no cover date exists, and issues with
+neither date use `(Unknown Date)`.
 
 Comic Name never chooses a series or issue automatically. Add your ComicVine
 API key in Preferences, then choose one of two workflows:

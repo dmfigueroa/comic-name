@@ -153,6 +153,7 @@ mod tests {
             issue_number: number.into(),
             name: None,
             cover_date: Some("2014-10-01".into()),
+            store_date: None,
         }
     }
 

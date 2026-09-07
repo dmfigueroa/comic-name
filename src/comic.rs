@@ -99,12 +99,21 @@ pub fn format_filename(volume: &Volume, issue: &Issue, extension: &str) -> Resul
     let volume_year = volume
         .start_year
         .ok_or_else(|| anyhow!("ComicVine has no volume year for this series"))?;
-    let cover_date = issue
-        .cover_date
-        .as_deref()
-        .ok_or_else(|| anyhow!("ComicVine has no cover date for this issue"))?;
-    let date = NaiveDate::parse_from_str(cover_date, "%Y-%m-%d")
-        .with_context(|| format!("ComicVine returned an invalid cover date: {cover_date}"))?;
+    let date = if let Some(cover_date) = issue.cover_date.as_deref() {
+        Some(
+            NaiveDate::parse_from_str(cover_date, "%Y-%m-%d").with_context(|| {
+                format!("ComicVine returned an invalid cover date: {cover_date}")
+            })?,
+        )
+    } else if let Some(store_date) = issue.store_date.as_deref() {
+        Some(
+            NaiveDate::parse_from_str(store_date, "%Y-%m-%d").with_context(|| {
+                format!("ComicVine returned an invalid in-store date: {store_date}")
+            })?,
+        )
+    } else {
+        None
+    };
     let (series, annual) = annual_parts(&volume.name);
     let series = sanitize_component(series);
     let issue_number = sanitize_component(issue.issue_number.trim());
@@ -113,11 +122,13 @@ pub fn format_filename(volume: &Volume, issue: &Issue, extension: &str) -> Resul
     }
     let annual = if annual { " Annual" } else { "" };
 
+    let date = date.map_or_else(
+        || "Unknown Date".to_string(),
+        |date| format!("{} {}", date.format("%B"), date.year()),
+    );
+
     Ok(format!(
-        "{series} ({volume_year}){annual} #{} ({} {}).{}",
-        issue_number,
-        date.format("%B"),
-        date.year(),
+        "{series} ({volume_year}){annual} #{issue_number} ({date}).{}",
         extension.to_ascii_lowercase()
     ))
 }
@@ -278,6 +289,14 @@ mod tests {
             issue_number: number.into(),
             name: None,
             cover_date: cover_date.map(str::to_string),
+            store_date: None,
+        }
+    }
+
+    fn issue_with_dates(number: &str, cover_date: Option<&str>, store_date: Option<&str>) -> Issue {
+        Issue {
+            store_date: store_date.map(str::to_string),
+            ..issue(number, cover_date)
         }
     }
 
@@ -338,6 +357,38 @@ mod tests {
     #[test]
     fn requires_the_metadata_used_by_the_format() {
         assert!(format_filename(&volume("Batman", None), &issue("1", None), "cbz").is_err());
+    }
+
+    #[test]
+    fn uses_the_in_store_date_when_cover_date_is_missing() {
+        let result = format_filename(
+            &volume("Batman", Some(2014)),
+            &issue_with_dates("1", None, Some("2014-10-15")),
+            "cbz",
+        )
+        .unwrap();
+
+        assert_eq!(result, "Batman (2014) #1 (October 2014).cbz");
+    }
+
+    #[test]
+    fn prefers_the_cover_date_when_both_dates_are_available() {
+        let result = format_filename(
+            &volume("Batman", Some(2014)),
+            &issue_with_dates("1", Some("2014-10-01"), Some("2014-10-15")),
+            "cbz",
+        )
+        .unwrap();
+
+        assert_eq!(result, "Batman (2014) #1 (October 2014).cbz");
+    }
+
+    #[test]
+    fn uses_an_explicit_date_fallback_when_both_dates_are_missing() {
+        let result =
+            format_filename(&volume("Batman", Some(2014)), &issue("1", None), "cbz").unwrap();
+
+        assert_eq!(result, "Batman (2014) #1 (Unknown Date).cbz");
     }
 
     #[test]

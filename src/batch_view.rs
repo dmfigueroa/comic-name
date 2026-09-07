@@ -521,7 +521,7 @@ impl BatchView {
                 })
                 .unwrap_or_default();
             if let Some(issue) = issue {
-                let issue_date = issue.cover_date.as_deref().unwrap_or("Unknown cover date");
+                let issue_date = issue.release_date().unwrap_or("Unknown release date");
                 self.issue_list
                     .append(&data_row(&issue_title, Some(issue_date)));
             } else {

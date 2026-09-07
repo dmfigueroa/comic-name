@@ -421,7 +421,7 @@ fn volume_row(volume: &Volume) -> adw::ActionRow {
 
 fn issue_row(issue: &Issue) -> adw::ActionRow {
     let title = issue.name.as_deref().unwrap_or("Untitled issue");
-    let date = issue.cover_date.as_deref().unwrap_or("Unknown cover date");
+    let date = issue.release_date().unwrap_or("Unknown release date");
     data_row(&format!("#{} - {title}", issue.issue_number), Some(date))
 }
 

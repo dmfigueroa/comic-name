@@ -27,6 +27,7 @@ mod config;
 mod list_view;
 mod single_view;
 mod window;
+mod workflow_navigation;
 
 use self::application::ComicNameApplication;
 use self::window::ComicNameWindow;

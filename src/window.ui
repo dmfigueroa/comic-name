@@ -11,7 +11,7 @@
         <property name="child">
           <object class="AdwToolbarView">
             <child type="top">
-              <object class="AdwHeaderBar">
+              <object class="AdwHeaderBar" id="welcome_header">
                 <property name="title-widget">
                   <object class="AdwWindowTitle">
                     <property name="title" translatable="yes">Comic Name</property>

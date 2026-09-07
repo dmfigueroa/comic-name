@@ -103,7 +103,12 @@ impl DataList {
     fn with_selection(selection_kind: SelectionKind) -> Self {
         let model = gio::ListStore::new::<DataRow>();
         let single_selection = match selection_kind {
-            SelectionKind::Single => Some(gtk::SingleSelection::new(Some(model.clone()))),
+            SelectionKind::Single => {
+                let selection = gtk::SingleSelection::new(Some(model.clone()));
+                selection.set_autoselect(false);
+                selection.set_can_unselect(true);
+                Some(selection)
+            }
             _ => None,
         };
         let multi_selection = match selection_kind {
@@ -185,6 +190,10 @@ impl DataList {
                 .expect("single selection is available")
                 .set_selected(*index as u32);
         }
+    }
+
+    pub fn clear_selection(&self) {
+        self.selection.unselect_all();
     }
 }
 

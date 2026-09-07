@@ -13,10 +13,14 @@ use crate::comic::{rename_matched, ComicFile};
 use crate::comic_vine::{self, Issue, Volume};
 use crate::list_view::DataList;
 use crate::window::ComicNameWindow;
+use crate::workflow_navigation::{WorkflowNavigation, WorkflowPage, WorkflowPageShell};
 
 #[derive(Debug)]
 pub struct BatchView {
-    root: gtk::ScrolledWindow,
+    root: adw::NavigationView,
+    navigation: RefCell<WorkflowNavigation>,
+    align_page: adw::NavigationPage,
+    review_page: adw::NavigationPage,
     search_entry: gtk::SearchEntry,
     search_button: gtk::Button,
     series_list: DataList,
@@ -24,6 +28,7 @@ pub struct BatchView {
     issue_list: DataList,
     removed_list: gtk::ListBox,
     preview_list: gtk::ListBox,
+    review_button: gtk::Button,
     rename_button: gtk::Button,
     files: Vec<ComicFile>,
     root_directory: PathBuf,
@@ -56,15 +61,32 @@ impl BatchView {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        let review_button = gtk::Button::builder()
+            .label("Review Renames")
+            .sensitive(false)
+            .halign(gtk::Align::End)
+            .build();
+        review_button.add_css_class("suggested-action");
+        review_button.add_css_class("pill");
         let rename_button = gtk::Button::builder()
-            .label("Review Batch Rename")
+            .label("Rename Comics")
             .sensitive(false)
             .halign(gtk::Align::End)
             .build();
         rename_button.add_css_class("suggested-action");
         rename_button.add_css_class("pill");
 
-        let content = gtk::Box::builder()
+        let choose_content = page_content();
+        let search_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        search_row.append(&search_entry);
+        search_row.append(&search_button);
+        choose_content.append(&search_row);
+        choose_content.append(&list_scroller(&series_list.view, 300));
+
+        let align_content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(12)
             .margin_top(20)
@@ -72,33 +94,16 @@ impl BatchView {
             .margin_start(20)
             .margin_end(20)
             .build();
-        let title_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .build();
-        let title = gtk::Label::builder()
-            .label(format!("Align {} comics", files.len()))
+        let description = gtk::Label::builder()
+            .label(format!(
+                "Align {} local comics with the fixed ComicVine issue list.",
+                files.len()
+            ))
             .xalign(0.0)
-            .hexpand(true)
+            .wrap(true)
             .build();
-        title.add_css_class("title-2");
-        let new_folder_button = gtk::Button::builder().label("Open Another Folder").build();
-        title_row.append(&title);
-        title_row.append(&new_folder_button);
-        content.append(&title_row);
-
-        let search_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        search_row.append(&search_entry);
-        search_row.append(&search_button);
-        content.append(&search_row);
-        content.append(&section_label("1. CHOOSE ONE COMICVINE SERIES"));
-        content.append(&list_scroller(&series_list.view, 125));
-        content.append(&section_label(
-            "2. ALIGN LOCAL FILES WITH THE FIXED COMICVINE ISSUE LIST",
-        ));
+        description.add_css_class("dim-label");
+        align_content.append(&description);
 
         let shared_adjustment = batch_scroll_adjustment();
         let file_scroller = gtk::ScrolledWindow::builder()
@@ -134,7 +139,7 @@ impl BatchView {
             .start_child(&file_column)
             .end_child(&issue_column)
             .build();
-        content.append(&alignment_pane);
+        align_content.append(&alignment_pane);
 
         let controls = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -146,7 +151,7 @@ impl BatchView {
         controls.append(&up_button);
         controls.append(&down_button);
         controls.append(&remove_button);
-        content.append(&controls);
+        align_content.append(&controls);
 
         let removed_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -162,18 +167,28 @@ impl BatchView {
             .label("Removed files")
             .child(&removed_box)
             .build();
-        content.append(&removed_expander);
+        align_content.append(&removed_expander);
+        align_content.append(&review_button);
 
-        content.append(&section_label("3. REVIEW THE RESULTING FILENAMES"));
-        content.append(&list_scroller(&preview_list, 130));
-        content.append(&rename_button);
+        let review_content = page_content();
+        review_content.append(&list_scroller(&preview_list, 300));
+        review_content.append(&rename_button);
 
-        let root = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .child(&content)
-            .build();
+        let choose_shell =
+            WorkflowPageShell::new("Choose Series", &choose_content, "Open Another Folder");
+        let align_shell =
+            WorkflowPageShell::new("Align Files", &align_content, "Open Another Folder");
+        let review_shell =
+            WorkflowPageShell::new("Review Renames", &review_content, "Open Another Folder");
+        let root = adw::NavigationView::new();
+        root.add(&choose_shell.page());
+        root.add(&align_shell.page());
+        root.add(&review_shell.page());
         let view = Rc::new(Self {
             root,
+            navigation: RefCell::new(WorkflowNavigation::batch()),
+            align_page: align_shell.page(),
+            review_page: review_shell.page(),
             search_entry,
             search_button,
             series_list,
@@ -181,6 +196,7 @@ impl BatchView {
             issue_list,
             removed_list,
             preview_list,
+            review_button,
             rename_button,
             files,
             root_directory,
@@ -192,7 +208,11 @@ impl BatchView {
         view.show_unaligned_files();
         view.setup_callbacks(
             window,
-            &new_folder_button,
+            &[
+                (choose_shell.action_button(), choose_shell.back_button()),
+                (align_shell.action_button(), align_shell.back_button()),
+                (review_shell.action_button(), review_shell.back_button()),
+            ],
             &up_button,
             &down_button,
             &remove_button,
@@ -201,23 +221,48 @@ impl BatchView {
         view
     }
 
-    pub fn root(&self) -> gtk::ScrolledWindow {
+    pub fn root(&self) -> adw::NavigationView {
         self.root.clone()
     }
 
     fn setup_callbacks(
         self: &Rc<Self>,
         window: &ComicNameWindow,
-        new_folder_button: &gtk::Button,
+        header_buttons: &[(gtk::Button, gtk::Button)],
         up_button: &gtk::Button,
         down_button: &gtk::Button,
         remove_button: &gtk::Button,
         restore_button: &gtk::Button,
     ) {
-        let weak_window = window.downgrade();
-        new_folder_button.connect_clicked(move |_| {
-            if let Some(window) = weak_window.upgrade() {
-                window.choose_folder();
+        for (button, _) in header_buttons {
+            let weak_window = window.downgrade();
+            button.connect_clicked(move |_| {
+                if let Some(window) = weak_window.upgrade() {
+                    window.choose_folder();
+                }
+            });
+        }
+        for (_, button) in header_buttons {
+            let weak_self = Rc::downgrade(self);
+            let weak_window = window.downgrade();
+            button.connect_clicked(move |_| {
+                let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade())
+                else {
+                    return;
+                };
+                if view.navigation.borrow().current() == WorkflowPage::ChooseSeries {
+                    window.show_welcome();
+                } else {
+                    view.root.pop();
+                }
+            });
+        }
+        let weak_self = Rc::downgrade(self);
+        self.root.connect_popped(move |_, _| {
+            if let Some(view) = weak_self.upgrade() {
+                if view.navigation.borrow_mut().back() == Some(WorkflowPage::ChooseSeries) {
+                    view.series_list.clear_selection();
+                }
             }
         });
 
@@ -296,6 +341,15 @@ impl BatchView {
         });
 
         let weak_self = Rc::downgrade(self);
+        self.review_button.connect_clicked(move |_| {
+            if let Some(view) = weak_self.upgrade() {
+                if view.navigation.borrow_mut().advance() == Some(WorkflowPage::ReviewRenames) {
+                    view.root.push(&view.review_page);
+                }
+            }
+        });
+
+        let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
         self.rename_button.connect_clicked(move |_| {
             if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
@@ -324,6 +378,7 @@ impl BatchView {
         self.volumes.borrow_mut().clear();
         self.selected_volume.replace(None);
         self.alignment.replace(None);
+        self.review_button.set_sensitive(false);
         self.rename_button.set_sensitive(false);
         self.series_list.clear();
         self.series_list.append("Searching ComicVine...", None);
@@ -395,6 +450,12 @@ impl BatchView {
         self.show_unaligned_files();
         self.issue_list.clear();
         self.issue_list.append("Loading issues...", None);
+        let choosing_series = self.navigation.borrow().current() == WorkflowPage::ChooseSeries;
+        if choosing_series
+            && self.navigation.borrow_mut().advance() == Some(WorkflowPage::AlignFiles)
+        {
+            self.root.push(&self.align_page);
+        }
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
 
@@ -548,8 +609,9 @@ impl BatchView {
             ));
         }
         self.rename_button.set_sensitive(!matches.is_empty());
+        self.review_button.set_sensitive(!matches.is_empty());
         self.rename_button
-            .set_label(&format!("Review {} Renames", matches.len()));
+            .set_label(&format!("Rename {} Comics", matches.len()));
 
         if let Some(indices) = selection {
             self.file_list.select_indices(&indices);
@@ -659,11 +721,15 @@ fn batch_scroll_adjustment() -> gtk::Adjustment {
     gtk::Adjustment::new(0.0, 0.0, 0.0, 1.0, 10.0, 0.0)
 }
 
-fn section_label(text: &str) -> gtk::Label {
-    let label = gtk::Label::builder().label(text).xalign(0.0).build();
-    label.add_css_class("caption");
-    label.add_css_class("dim-label");
-    label
+fn page_content() -> gtk::Box {
+    gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(14)
+        .margin_top(24)
+        .margin_bottom(24)
+        .margin_start(24)
+        .margin_end(24)
+        .build()
 }
 
 fn column_label(text: &str) -> gtk::Label {
@@ -727,12 +793,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batch_scroll_adjustment_starts_with_valid_bounds() {
+    fn workflow_widgets_start_with_valid_public_properties() {
         if !gtk::is_initialized() {
             gtk::init().expect("GTK must initialize for this test");
         }
         let adjustment = batch_scroll_adjustment();
+        let choices = DataList::new();
+        let content = gtk::Label::new(Some("Series results"));
+        let shell = WorkflowPageShell::new("Choose Series", &content, "Open Another Folder");
 
         assert!(adjustment.lower() + adjustment.page_size() <= adjustment.upper());
+        let selection = choices
+            .single_selection
+            .expect("choices use single selection");
+        assert!(!selection.is_autoselect());
+        assert!(selection.can_unselect());
+        assert_eq!(shell.page().title(), "Choose Series");
+        assert_eq!(
+            shell.action_button().label().as_deref(),
+            Some("Open Another Folder")
+        );
+        assert_eq!(shell.clamp().maximum_size(), 960);
     }
 }

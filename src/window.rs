@@ -23,6 +23,8 @@ mod imp {
         #[template_child]
         pub content_stack: TemplateChild<gtk::Stack>,
         #[template_child]
+        pub welcome_header: TemplateChild<adw::HeaderBar>,
+        #[template_child]
         pub open_comic_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub open_folder_button: TemplateChild<gtk::Button>,
@@ -151,6 +153,7 @@ impl ComicNameWindow {
         let view = SingleView::new(file, self);
         self.imp().single_host.append(&view.root());
         self.imp().single_view.replace(Some(view));
+        self.imp().welcome_header.set_visible(false);
         self.imp().content_stack.set_visible_child_name("single");
     }
 
@@ -160,10 +163,12 @@ impl ComicNameWindow {
         let view = BatchView::new(files, root, self);
         self.imp().batch_host.append(&view.root());
         self.imp().batch_view.replace(Some(view));
+        self.imp().welcome_header.set_visible(false);
         self.imp().content_stack.set_visible_child_name("batch");
     }
 
     pub(crate) fn show_welcome(&self) {
+        self.imp().welcome_header.set_visible(true);
         self.imp().content_stack.set_visible_child_name("welcome");
     }
 

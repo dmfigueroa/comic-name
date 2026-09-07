@@ -32,7 +32,6 @@ pub struct Issue {
 struct VolumeResponse {
     status_code: u16,
     error: String,
-    number_of_total_results: usize,
     results: Vec<Volume>,
 }
 
@@ -45,6 +44,10 @@ struct IssueResponse {
 }
 
 pub fn search_volumes(api_key: &str, query: &str) -> Result<Vec<Volume>> {
+    search_volumes_from(API_BASE, api_key, query)
+}
+
+fn search_volumes_from(api_base: &str, api_key: &str, query: &str) -> Result<Vec<Volume>> {
     if api_key.trim().is_empty() {
         bail!("Add your ComicVine API key in Preferences first");
     }
@@ -52,33 +55,21 @@ pub fn search_volumes(api_key: &str, query: &str) -> Result<Vec<Volume>> {
         bail!("Enter a series name");
     }
 
-    let agent = http_agent();
-    let mut volumes = Vec::new();
-    loop {
-        let offset = volumes.len().to_string();
-        let response: VolumeResponse = agent
-            .get(&format!("{API_BASE}/search/"))
-            .set("User-Agent", "ComicName/0.1 (comic metadata organizer)")
-            .query("api_key", api_key.trim())
-            .query("format", "json")
-            .query("resources", "volume")
-            .query("field_list", "id,name,start_year,publisher")
-            .query("limit", "10")
-            .query("offset", &offset)
-            .query("query", query.trim())
-            .call()
-            .context("Could not contact ComicVine")?
-            .into_json()
-            .context("ComicVine returned an invalid response")?;
-        validate(response.status_code, &response.error)?;
-        let total = response.number_of_total_results;
-        let received = response.results.len();
-        volumes.extend(response.results);
-        if received == 0 || volumes.len() >= total {
-            break;
-        }
-    }
-    Ok(volumes)
+    let response: VolumeResponse = http_agent()
+        .get(&format!("{api_base}/search/"))
+        .set("User-Agent", "ComicName/0.1 (comic metadata organizer)")
+        .query("api_key", api_key.trim())
+        .query("format", "json")
+        .query("resources", "volume")
+        .query("field_list", "id,name,start_year,publisher")
+        .query("limit", "10")
+        .query("query", query.trim())
+        .call()
+        .context("Could not contact ComicVine")?
+        .into_json()
+        .context("ComicVine returned an invalid response")?;
+    validate(response.status_code, &response.error)?;
+    Ok(response.results)
 }
 
 pub fn issues_for_volume(api_key: &str, volume_id: u64) -> Result<Vec<Issue>> {
@@ -204,7 +195,48 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
     use super::*;
+
+    #[test]
+    fn search_returns_first_page_without_waiting_for_every_match() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let bytes_read = stream.read(&mut request).unwrap();
+            let request = std::str::from_utf8(&request[..bytes_read]).unwrap();
+            assert!(request.contains("limit=10"));
+            assert!(!request.contains("offset="));
+            let body = r#"{
+                "status_code": 1,
+                "error": "OK",
+                "number_of_total_results": 20,
+                "results": [{
+                    "id": 1,
+                    "name": "Batman",
+                    "start_year": "2014",
+                    "publisher": {"name": "DC Comics"}
+                }]
+            }"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let volumes = search_volumes_from(&format!("http://{address}"), "key", "Batman")
+            .expect("the usable first page should be returned");
+        server.join().unwrap();
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].name, "Batman");
+    }
 
     #[test]
     fn comic_vine_string_year_is_supported() {

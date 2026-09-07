@@ -15,3 +15,32 @@ API key in Preferences, then choose one of two workflows:
   local files by moving rows or creating gaps before confirming the batch.
 
 Renames use portal-aware GIO file moves and never overwrite existing files.
+
+## Development
+
+The host does not provide a C compiler, so run Rust tests and Clippy with the
+GNOME 50 Flatpak SDK:
+
+```bash
+flatpak run --command=sh \
+  --filesystem="$PWD" \
+  --filesystem="$HOME/.cargo" \
+  --filesystem="$HOME/.rustup:ro" \
+  --socket=wayland \
+  --socket=fallback-x11 \
+  --env=PATH="$HOME/.cargo/bin:/usr/bin" \
+  org.gnome.Sdk//50 -c 'cargo test --offline'
+```
+
+```bash
+cargo fmt --check
+```
+
+```bash
+flatpak run --command=sh \
+  --filesystem="$PWD" \
+  --filesystem="$HOME/.cargo" \
+  --filesystem="$HOME/.rustup:ro" \
+  --env=PATH="$HOME/.cargo/bin:/usr/bin" \
+  org.gnome.Sdk//50 -c 'cargo clippy --all-targets --offline -- -D warnings'
+```

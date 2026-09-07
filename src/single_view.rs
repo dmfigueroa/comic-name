@@ -233,7 +233,7 @@ impl SingleView {
             }
             Ok(volumes) => {
                 for volume in &volumes {
-                    self.series_list.append(&volume_label(volume));
+                    self.series_list.append(&volume_row(volume));
                 }
                 self.volumes.replace(volumes);
             }
@@ -303,7 +303,7 @@ impl SingleView {
             }
             Ok(issues) => {
                 for issue in &issues {
-                    self.issue_list.append(&issue_label(issue));
+                    self.issue_list.append(&issue_row(issue));
                 }
                 self.issues.replace(issues);
             }
@@ -407,7 +407,7 @@ fn list_scroller(list: &gtk::ListBox, minimum_height: i32) -> gtk::ScrolledWindo
         .build()
 }
 
-fn volume_label(volume: &Volume) -> gtk::Label {
+fn volume_row(volume: &Volume) -> adw::ActionRow {
     let year = volume
         .start_year
         .map_or_else(|| "Unknown year".into(), |year| year.to_string());
@@ -416,25 +416,21 @@ fn volume_label(volume: &Volume) -> gtk::Label {
         .as_ref()
         .map(|publisher| publisher.name.as_str())
         .unwrap_or("Unknown publisher");
-    row_label(&format!("{} ({year})\n{publisher}", volume.name))
+    data_row(&volume.name, Some(&format!("{publisher} ({year})")))
 }
 
-fn issue_label(issue: &Issue) -> gtk::Label {
+fn issue_row(issue: &Issue) -> adw::ActionRow {
     let title = issue.name.as_deref().unwrap_or("Untitled issue");
     let date = issue.cover_date.as_deref().unwrap_or("Unknown cover date");
-    row_label(&format!("#{} - {title}\n{date}", issue.issue_number))
+    data_row(&format!("#{} - {title}", issue.issue_number), Some(date))
 }
 
-fn row_label(text: &str) -> gtk::Label {
-    gtk::Label::builder()
-        .label(text)
-        .xalign(0.0)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(12)
-        .margin_end(12)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .build()
+fn data_row(title: &str, subtitle: Option<&str>) -> adw::ActionRow {
+    let row = adw::ActionRow::builder().title(title).build();
+    if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.is_empty()) {
+        row.set_subtitle(subtitle);
+    }
+    row
 }
 
 fn status_label(text: &str) -> gtk::Label {

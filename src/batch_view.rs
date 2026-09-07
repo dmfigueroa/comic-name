@@ -319,8 +319,8 @@ impl BatchView {
         clear_list(&self.removed_list);
         for file in &self.files {
             self.file_list
-                .append(&aligned_row_label(&self.display_file(file), ""));
-            self.issue_list.append(&aligned_row_label("", ""));
+                .append(&data_row(&self.display_file(file), None));
+            self.issue_list.append(&data_row("", None));
         }
         clear_list(&self.preview_list);
         self.preview_list
@@ -387,7 +387,7 @@ impl BatchView {
             }
             Ok(volumes) => {
                 for volume in &volumes {
-                    self.series_list.append(&volume_label(volume));
+                    self.series_list.append(&volume_row(volume));
                 }
                 self.volumes.replace(volumes);
             }
@@ -506,9 +506,9 @@ impl BatchView {
                 .file(index)
                 .map(|file| self.display_file(file))
                 .unwrap_or_default();
-            self.file_list.append(&aligned_row_label(
-                &file_name,
-                if file_name.is_empty() { "Gap" } else { "" },
+            self.file_list.append(&data_row(
+                if file_name.is_empty() { "" } else { &file_name },
+                None,
             ));
             let issue = alignment.issue(index);
             let issue_title = issue
@@ -520,16 +520,18 @@ impl BatchView {
                     )
                 })
                 .unwrap_or_default();
-            let issue_date = issue
-                .and_then(|issue| issue.cover_date.as_deref())
-                .unwrap_or("Gap");
-            self.issue_list
-                .append(&aligned_row_label(&issue_title, issue_date));
+            if let Some(issue) = issue {
+                let issue_date = issue.cover_date.as_deref().unwrap_or("Unknown cover date");
+                self.issue_list
+                    .append(&data_row(&issue_title, Some(issue_date)));
+            } else {
+                self.issue_list.append(&data_row("", None));
+            }
         }
         for index in 0..alignment.removed_count() {
             if let Some(file) = alignment.removed_file(index) {
                 self.removed_list
-                    .append(&row_label(&self.display_file(file)));
+                    .append(&data_row(&self.display_file(file), None));
             }
         }
 
@@ -542,16 +544,15 @@ impl BatchView {
         for file in &matches {
             match file.target_path() {
                 Ok(target) => {
-                    self.preview_list.append(&row_label(&format!(
-                        "{}  ->  {}",
-                        self.display_file(file),
-                        display_path(&self.root_directory, &target)
-                    )));
+                    self.preview_list.append(&data_row(
+                        &self.display_file(file),
+                        Some(&display_path(&self.root_directory, &target)),
+                    ));
                 }
-                Err(error) => self.preview_list.append(&row_label(&format!(
-                    "{}  ->  Cannot rename: {error}",
-                    self.display_file(file)
-                ))),
+                Err(error) => self.preview_list.append(&data_row(
+                    &self.display_file(file),
+                    Some(&format!("Cannot rename: {error}")),
+                )),
             }
         }
         if matches.is_empty() {
@@ -696,7 +697,7 @@ fn list_scroller(list: &gtk::ListBox, minimum_height: i32) -> gtk::ScrolledWindo
         .build()
 }
 
-fn volume_label(volume: &Volume) -> gtk::Label {
+fn volume_row(volume: &Volume) -> adw::ActionRow {
     let year = volume
         .start_year
         .map_or_else(|| "Unknown year".into(), |year| year.to_string());
@@ -705,27 +706,15 @@ fn volume_label(volume: &Volume) -> gtk::Label {
         .as_ref()
         .map(|publisher| publisher.name.as_str())
         .unwrap_or("Unknown publisher");
-    aligned_row_label(&format!("{} ({year})", volume.name), publisher)
+    data_row(&volume.name, Some(&format!("{publisher} ({year})")))
 }
 
-fn aligned_row_label(title: &str, subtitle: &str) -> gtk::Label {
-    row_label(&format!(
-        "{}\n{}",
-        if title.is_empty() { " " } else { title },
-        if subtitle.is_empty() { " " } else { subtitle }
-    ))
-}
-
-fn row_label(text: &str) -> gtk::Label {
-    gtk::Label::builder()
-        .label(text)
-        .xalign(0.0)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(12)
-        .margin_end(12)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .build()
+fn data_row(title: &str, subtitle: Option<&str>) -> adw::ActionRow {
+    let row = adw::ActionRow::builder().title(title).build();
+    if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.is_empty()) {
+        row.set_subtitle(subtitle);
+    }
+    row
 }
 
 fn status_label(text: &str) -> gtk::Label {

@@ -65,20 +65,8 @@ impl BatchView {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
-        let review_button = gtk::Button::builder()
-            .label("Review Renames")
-            .sensitive(false)
-            .halign(gtk::Align::End)
-            .build();
-        review_button.add_css_class("suggested-action");
-        review_button.add_css_class("pill");
-        let rename_button = gtk::Button::builder()
-            .label("Rename Comics")
-            .sensitive(false)
-            .halign(gtk::Align::End)
-            .build();
-        rename_button.add_css_class("suggested-action");
-        rename_button.add_css_class("pill");
+        let review_button = review_action_button();
+        let rename_button = rename_action_button();
 
         let choose_content = page_content();
         let search_row = gtk::Box::builder()
@@ -780,6 +768,27 @@ fn page_content() -> gtk::Box {
         .build()
 }
 
+fn review_action_button() -> gtk::Button {
+    let button = gtk::Button::builder()
+        .label("Review Renames")
+        .sensitive(false)
+        .halign(gtk::Align::End)
+        .build();
+    button.add_css_class("pill");
+    button
+}
+
+fn rename_action_button() -> gtk::Button {
+    let button = gtk::Button::builder()
+        .label("Rename Comics")
+        .sensitive(false)
+        .halign(gtk::Align::End)
+        .build();
+    button.add_css_class("suggested-action");
+    button.add_css_class("pill");
+    button
+}
+
 fn column_label(text: &str) -> gtk::Label {
     let label = gtk::Label::builder().label(text).xalign(0.0).build();
     label.add_css_class("caption");
@@ -889,5 +898,22 @@ mod tests {
 
         assert_eq!(row.height_request(), ALIGNMENT_ROW_HEIGHT);
         assert_eq!(row.title_lines(), 1);
+    }
+
+    #[test]
+    fn batch_actions_have_only_the_rename_primary_action() {
+        if !gtk::is_initialized() {
+            gtk::init().expect("GTK must initialize for this test");
+        }
+
+        let actions = [review_action_button(), rename_action_button()];
+        let suggested_actions = actions
+            .iter()
+            .filter(|button| button.has_css_class("suggested-action"))
+            .count();
+
+        assert_eq!(suggested_actions, 1);
+        assert!(!actions[0].has_css_class("suggested-action"));
+        assert!(actions[1].has_css_class("suggested-action"));
     }
 }

@@ -105,12 +105,6 @@ impl ComicNameWindow {
             match result {
                 Ok(file) => {
                     let path = portal_host_path(&file).or_else(|| file.path());
-                    eprintln!(
-                        "[DEBUG-rename-20260907] selected single file uri={} path={:?} basename={:?}",
-                        file.uri(),
-                        path,
-                        file.basename()
-                    );
                     window.open_path(path)
                 }
                 Err(error) if error.matches(gtk::DialogError::Dismissed) => {}

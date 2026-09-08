@@ -159,6 +159,13 @@ fn sanitize_component(value: &str) -> String {
 }
 
 pub fn rename_matched(files: &mut [ComicFile]) -> Result<usize> {
+    rename_matched_with_progress(files, |_, _| {})
+}
+
+pub fn rename_matched_with_progress(
+    files: &mut [ComicFile],
+    mut report_progress: impl FnMut(usize, usize),
+) -> Result<usize> {
     let plans = files
         .iter()
         .enumerate()
@@ -171,14 +178,7 @@ pub fn rename_matched(files: &mut [ComicFile]) -> Result<usize> {
         .iter()
         .map(|(_, source, _)| source.clone())
         .collect::<HashSet<_>>();
-    for (_, source, target) in &plans {
-        eprintln!(
-            "[DEBUG-rename-20260907] plan source={:?} target={:?} source_uri={} target_uri={}",
-            source,
-            target,
-            gio::File::for_path(source).uri(),
-            gio::File::for_path(target).uri()
-        );
+    for (position, (_, source, target)) in plans.iter().enumerate() {
         if !gio::File::for_path(source).query_exists(None::<&gio::Cancellable>) {
             bail!("{} no longer exists", source.display());
         }
@@ -197,31 +197,33 @@ pub fn rename_matched(files: &mut [ComicFile]) -> Result<usize> {
                 target.display()
             );
         }
+        report_progress(position + 1, plans.len() * 2);
     }
 
     let mut completed: Vec<(usize, PathBuf, PathBuf)> = Vec::new();
-    for (index, source, target) in &plans {
-        if source == target {
-            continue;
-        }
-        if let Err(error) = rename_no_replace(source, target) {
-            let mut stranded = Vec::new();
-            for (completed_index, original, completed_target) in completed.iter().rev() {
-                if rename_no_replace(completed_target, original).is_err() {
-                    files[*completed_index].path = completed_target.clone();
-                    stranded.push(completed_target.display().to_string());
+    for (position, (index, source, target)) in plans.iter().enumerate() {
+        if source != target {
+            if let Err(error) = rename_no_replace(source, target) {
+                let mut stranded = Vec::new();
+                for (completed_index, original, completed_target) in completed.iter().rev() {
+                    if rename_no_replace(completed_target, original).is_err() {
+                        files[*completed_index].path = completed_target.clone();
+                        stranded.push(completed_target.display().to_string());
+                    }
                 }
+                if !stranded.is_empty() {
+                    bail!(
+                        "Could not rename {}: {error}. Rollback also failed; files remain at {}",
+                        source.display(),
+                        stranded.join(", ")
+                    );
+                }
+                return Err(error)
+                    .with_context(|| format!("Could not rename {}", source.display()));
             }
-            if !stranded.is_empty() {
-                bail!(
-                    "Could not rename {}: {error}. Rollback also failed; files remain at {}",
-                    source.display(),
-                    stranded.join(", ")
-                );
-            }
-            return Err(error).with_context(|| format!("Could not rename {}", source.display()));
+            completed.push((*index, source.clone(), target.clone()));
         }
-        completed.push((*index, source.clone(), target.clone()));
+        report_progress(plans.len() + position + 1, plans.len() * 2);
     }
     for (index, _, target) in &completed {
         files[*index].path = target.clone();
@@ -236,35 +238,9 @@ fn rename_no_replace(source: &Path, target: &Path) -> std::result::Result<(), gt
         .expect("rename target must have a file name")
         .to_string_lossy();
     let source_file = gio::File::for_path(source);
-    eprintln!(
-        "[DEBUG-rename-20260907] set_display_name source={:?} source_uri={} target_name={:?}",
-        source,
-        source_file.uri(),
-        target_name
-    );
-    let result = source_file
+    source_file
         .set_display_name(&target_name, None::<&gio::Cancellable>)
-        .map(|renamed| {
-            eprintln!(
-                "[DEBUG-rename-20260907] rename result_uri={} result_path={:?}",
-                renamed.uri(),
-                renamed.path()
-            );
-        });
-    eprintln!(
-        "[DEBUG-rename-20260907] after source_exists={} target_exists={} parent_entries={:?}",
-        source_file.query_exists(None::<&gio::Cancellable>),
-        gio::File::for_path(target).query_exists(None::<&gio::Cancellable>),
-        source
-            .parent()
-            .and_then(|parent| fs::read_dir(parent).ok())
-            .map(|entries| {
-                entries
-                    .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
-                    .collect::<Vec<_>>()
-            })
-    );
-    result.map(|_| ())
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -411,6 +387,25 @@ mod tests {
         assert_eq!(entries, vec!["Batman (2014) #1 (October 2014).cbz"]);
         assert_eq!(fs::read(files[0].path.clone()).unwrap(), b"comic");
 
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn reports_progress_after_each_processed_file() {
+        let directory = temporary_directory();
+        let first = directory.join("scan-a.cbz");
+        let second = directory.join("scan-b.cbz");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&second, b"second").unwrap();
+        let mut files = vec![matched_file(first, "1"), matched_file(second, "2")];
+        let mut progress = Vec::new();
+
+        rename_matched_with_progress(&mut files, |completed, total| {
+            progress.push((completed, total));
+        })
+        .unwrap();
+
+        assert_eq!(progress, vec![(1, 4), (2, 4), (3, 4), (4, 4)]);
         fs::remove_dir_all(directory).unwrap();
     }
 

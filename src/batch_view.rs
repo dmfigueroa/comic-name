@@ -1,14 +1,15 @@
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
 
 use crate::alignment::BatchAlignment;
-use crate::comic::{rename_matched, ComicFile};
+use crate::comic::{rename_matched_with_progress, ComicFile};
 use crate::comic_vine::{self, Issue, Volume};
 use crate::list_view::DataList;
 use crate::window::ComicNameWindow;
@@ -566,28 +567,111 @@ impl BatchView {
         dialog.set_close_response("cancel");
         dialog.set_default_response(Some("rename"));
         dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+        let files = RefCell::new(Some(files));
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
         dialog.connect_response(Some("rename"), move |_, _| {
             let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) else {
                 return;
             };
-            let Some(volume) = view.selected_volume.borrow().clone() else {
+            let Some(mut files) = files.borrow_mut().take() else {
                 return;
             };
-            let mut files = view
-                .alignment
-                .borrow()
+            let file_count = files.len();
+            view.rename_button.set_sensitive(false);
+            view.rename_button.set_label("Renaming...");
+            let window_was_deletable = window.is_deletable();
+            window.set_deletable(false);
+            let application = window.application();
+            let quit_action = application
                 .as_ref()
-                .map(|alignment| alignment.matched_files(&volume))
-                .unwrap_or_default();
-            match rename_matched(&mut files) {
-                Ok(count) => {
-                    window.show_welcome();
-                    window.show_success(&format!("Renamed {count} comics"));
+                .and_then(|application| application.lookup_action("quit"))
+                .and_then(|action| action.downcast::<gio::SimpleAction>().ok());
+            let quit_was_enabled = quit_action.as_ref().map(|action| {
+                let enabled = action.is_enabled();
+                action.set_enabled(false);
+                enabled
+            });
+            let mut hold_guard = application.as_ref().map(|application| application.hold());
+
+            let progress_bar = gtk::ProgressBar::builder()
+                .show_text(true)
+                .text(format!("Checking 0 of {file_count}"))
+                .build();
+            let progress_dialog = adw::AlertDialog::builder()
+                .heading("Renaming comics")
+                .body("Keep Comic Name open while the files are renamed.")
+                .extra_child(&progress_bar)
+                .build();
+            progress_dialog.set_can_close(false);
+            progress_dialog.present(Some(&window));
+
+            let (sender, receiver) = mpsc::channel();
+            let completed = Arc::new(AtomicUsize::new(0));
+            let worker_completed = completed.clone();
+            std::thread::spawn(move || {
+                let result = rename_matched_with_progress(&mut files, |count, _| {
+                    worker_completed.store(count, Ordering::Relaxed);
+                });
+                let _ = sender.send(result);
+            });
+
+            let weak_self = Rc::downgrade(&view);
+            let weak_window = window.downgrade();
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                let step = completed.load(Ordering::Relaxed);
+                progress_bar.set_fraction(step as f64 / (file_count * 2) as f64);
+                if step <= file_count {
+                    progress_bar.set_text(Some(&format!("Checking {step} of {file_count}")));
+                } else {
+                    progress_bar.set_text(Some(&format!(
+                        "Renaming {} of {file_count}",
+                        step - file_count
+                    )));
                 }
-                Err(error) => window.show_error(&format!("{error:#}")),
-            }
+                let result = match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                    Err(mpsc::TryRecvError::Disconnected) => None,
+                };
+
+                progress_dialog.force_close();
+                if let (Some(action), Some(enabled)) = (&quit_action, quit_was_enabled) {
+                    action.set_enabled(enabled);
+                }
+                drop(hold_guard.take());
+                let view = weak_self.upgrade();
+                let window = weak_window.upgrade();
+                if let Some(view) = &view {
+                    view.rename_button.set_sensitive(true);
+                    view.rename_button
+                        .set_label(&format!("Rename {file_count} Comics"));
+                }
+                if let Some(window) = &window {
+                    window.set_deletable(window_was_deletable);
+                }
+
+                match result {
+                    Some(Ok(count)) => {
+                        let Some(window) = window else {
+                            return glib::ControlFlow::Break;
+                        };
+                        window.show_welcome();
+                        window.show_success(&format!("Renamed {count} comics"));
+                    }
+                    Some(Err(error)) => {
+                        if let Some(window) = window {
+                            window.show_error(&format!("{error:#}"));
+                        }
+                    }
+                    None => {
+                        if let Some(window) = window {
+                            window.show_error("Rename stopped before returning a result");
+                        }
+                    }
+                }
+                glib::ControlFlow::Break
+            });
         });
         dialog.present(Some(window));
     }

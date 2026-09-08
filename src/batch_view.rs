@@ -1,5 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -24,8 +23,8 @@ pub struct BatchView {
     search_entry: gtk::SearchEntry,
     search_button: gtk::Button,
     series_list: DataList,
-    file_list: DataList,
-    issue_list: DataList,
+    file_list: gtk::ListBox,
+    issue_list: gtk::ListBox,
     removed_list: gtk::ListBox,
     preview_list: gtk::ListBox,
     review_button: gtk::Button,
@@ -51,8 +50,14 @@ impl BatchView {
         let search_button = gtk::Button::builder().label("Search").build();
         search_button.add_css_class("suggested-action");
         let series_list = DataList::new();
-        let file_list = DataList::multi();
-        let issue_list = DataList::none();
+        let file_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .css_classes(["boxed-list"])
+            .build();
+        let issue_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
         let removed_list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Multiple)
             .css_classes(["boxed-list"])
@@ -111,20 +116,20 @@ impl BatchView {
             .min_content_height(260)
             .min_content_width(330)
             .vadjustment(&shared_adjustment)
-            .child(&file_list.view)
+            .child(&file_list)
             .build();
         let issue_scroller = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .min_content_height(260)
             .min_content_width(330)
             .vadjustment(&shared_adjustment)
-            .child(&issue_list.view)
+            .child(&issue_list)
             .build();
         let file_column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(6)
             .build();
-        file_column.append(&column_label("LOCAL FILES (SELECT TO MOVE)"));
+        file_column.append(&column_label("LOCAL FILES (DRAG TO REORDER)"));
         file_column.append(&file_scroller);
         let issue_column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -140,18 +145,6 @@ impl BatchView {
             .end_child(&issue_column)
             .build();
         align_content.append(&alignment_pane);
-
-        let controls = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        let up_button = gtk::Button::builder().label("Move Up").build();
-        let down_button = gtk::Button::builder().label("Move Down").build();
-        let remove_button = gtk::Button::builder().label("Remove from Matching").build();
-        controls.append(&up_button);
-        controls.append(&down_button);
-        controls.append(&remove_button);
-        align_content.append(&controls);
 
         let restore_button = gtk::Button::builder()
             .label("Restore Selected Files")
@@ -204,9 +197,6 @@ impl BatchView {
                 (align_shell.action_button(), align_shell.back_button()),
                 (review_shell.action_button(), review_shell.back_button()),
             ],
-            &up_button,
-            &down_button,
-            &remove_button,
             &restore_button,
         );
         view
@@ -220,9 +210,6 @@ impl BatchView {
         self: &Rc<Self>,
         window: &ComicNameWindow,
         header_buttons: &[(gtk::Button, gtk::Button)],
-        up_button: &gtk::Button,
-        down_button: &gtk::Button,
-        remove_button: &gtk::Button,
         restore_button: &gtk::Button,
     ) {
         for (button, _) in header_buttons {
@@ -287,32 +274,6 @@ impl BatchView {
                 }
             });
 
-        connect_alignment_button(self, window, up_button, |alignment, first, last| {
-            alignment.move_up(first, last)
-        });
-        connect_alignment_button(self, window, down_button, |alignment, first, last| {
-            alignment.move_down(first, last)
-        });
-
-        let weak_self = Rc::downgrade(self);
-        let weak_window = window.downgrade();
-        remove_button.connect_clicked(move |_| {
-            let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) else {
-                return;
-            };
-            let Some((first, last)) = view.selected_file_range(&window) else {
-                return;
-            };
-            if view
-                .alignment
-                .borrow_mut()
-                .as_mut()
-                .is_some_and(|alignment| alignment.remove(first, last))
-            {
-                view.refresh_alignment(None);
-            }
-        });
-
         let weak_self = Rc::downgrade(self);
         restore_button.connect_clicked(move |_| {
             let Some(view) = weak_self.upgrade() else {
@@ -349,13 +310,14 @@ impl BatchView {
         });
     }
 
-    fn show_unaligned_files(&self) {
-        self.file_list.clear();
-        self.issue_list.clear();
+    fn show_unaligned_files(self: &Rc<Self>) {
+        clear_list(&self.file_list);
+        clear_list(&self.issue_list);
         clear_list(&self.removed_list);
-        for file in &self.files {
-            self.file_list.append(&self.display_file(file), None);
-            self.issue_list.append("", None);
+        for (index, file) in self.files.iter().enumerate() {
+            self.file_list
+                .append(&self.file_row(index, &self.display_file(file)));
+            self.issue_list.append(&data_row("", None));
         }
         clear_list(&self.preview_list);
         self.preview_list
@@ -439,8 +401,8 @@ impl BatchView {
         self.alignment.replace(None);
         self.rename_button.set_sensitive(false);
         self.show_unaligned_files();
-        self.issue_list.clear();
-        self.issue_list.append("Loading issues...", None);
+        clear_list(&self.issue_list);
+        self.issue_list.append(&data_row("Loading issues...", None));
         let choosing_series = self.navigation.borrow().current() == WorkflowPage::ChooseSeries;
         if choosing_series
             && self.navigation.borrow_mut().advance() == Some(WorkflowPage::AlignFiles)
@@ -492,11 +454,15 @@ impl BatchView {
         });
     }
 
-    fn finish_issues(&self, result: anyhow::Result<Vec<Issue>>, window: &ComicNameWindow) {
+    fn finish_issues(
+        self: &Rc<Self>,
+        result: anyhow::Result<Vec<Issue>>,
+        window: &ComicNameWindow,
+    ) {
         match result {
             Ok(issues) if issues.is_empty() => {
-                self.issue_list.clear();
-                self.issue_list.append("No issues found", None);
+                clear_list(&self.issue_list);
+                self.issue_list.append(&data_row("No issues found", None));
             }
             Ok(issues) => {
                 self.alignment
@@ -504,38 +470,15 @@ impl BatchView {
                 self.refresh_alignment(None);
             }
             Err(error) => {
-                self.issue_list.clear();
+                clear_list(&self.issue_list);
                 window.show_error(&format!("{error:#}"));
             }
         }
     }
 
-    fn selected_file_range(&self, window: &ComicNameWindow) -> Option<(usize, usize)> {
-        let indices = self.file_list.selected_indices();
-        if indices.is_empty() {
-            window.show_error("Select one or more adjacent local files first");
-            return None;
-        }
-        if indices.windows(2).any(|pair| pair[1] != pair[0] + 1) {
-            window.show_error("Selected local files must be adjacent");
-            return None;
-        }
-        let first = indices[0];
-        let last = *indices.last().expect("selection is not empty");
-        let all_files =
-            self.alignment.borrow().as_ref().is_some_and(|alignment| {
-                (first..=last).all(|index| alignment.file(index).is_some())
-            });
-        if !all_files {
-            window.show_error("Blank rows cannot be moved or removed");
-            return None;
-        }
-        Some((first, last))
-    }
-
-    fn refresh_alignment(&self, selection: Option<Vec<usize>>) {
-        self.file_list.clear();
-        self.issue_list.clear();
+    fn refresh_alignment(self: &Rc<Self>, selection: Option<Vec<usize>>) {
+        clear_list(&self.file_list);
+        clear_list(&self.issue_list);
         clear_list(&self.removed_list);
         clear_list(&self.preview_list);
         let alignment = self.alignment.borrow();
@@ -548,8 +491,7 @@ impl BatchView {
                 .file(index)
                 .map(|file| self.display_file(file))
                 .unwrap_or_default();
-            self.file_list
-                .append(if file_name.is_empty() { "" } else { &file_name }, None);
+            self.file_list.append(&self.file_row(index, &file_name));
             let issue = alignment.issue(index);
             let issue_title = issue
                 .map(|issue| {
@@ -562,9 +504,10 @@ impl BatchView {
                 .unwrap_or_default();
             if let Some(issue) = issue {
                 let issue_date = issue.release_date().unwrap_or("Unknown release date");
-                self.issue_list.append(&issue_title, Some(issue_date));
+                self.issue_list
+                    .append(&data_row(&issue_title, Some(issue_date)));
             } else {
-                self.issue_list.append("", None);
+                self.issue_list.append(&data_row("", None));
             }
         }
         for index in 0..alignment.removed_count() {
@@ -604,8 +547,10 @@ impl BatchView {
         self.rename_button
             .set_label(&format!("Rename {} Comics", matches.len()));
 
-        if let Some(indices) = selection {
-            self.file_list.select_indices(&indices);
+        if let Some(index) = selection.and_then(|indices| indices.first().copied()) {
+            if let Some(row) = self.file_list.row_at_index(index as i32) {
+                self.file_list.select_row(Some(&row));
+            }
         }
     }
 
@@ -668,34 +613,132 @@ impl BatchView {
     fn display_file(&self, file: &ComicFile) -> String {
         display_path(&self.root_directory, &file.path)
     }
-}
 
-fn connect_alignment_button<F>(
-    view: &Rc<BatchView>,
-    window: &ComicNameWindow,
-    button: &gtk::Button,
-    movement: F,
-) where
-    F: Fn(&mut BatchAlignment, usize, usize) -> Option<RangeInclusive<usize>> + 'static,
-{
-    let weak_self = Rc::downgrade(view);
-    let weak_window = window.downgrade();
-    button.connect_clicked(move |_| {
-        let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) else {
-            return;
-        };
-        let Some((first, last)) = view.selected_file_range(&window) else {
-            return;
-        };
-        let selection = view
+    fn file_row(self: &Rc<Self>, index: usize, title: &str) -> gtk::ListBoxRow {
+        let row = gtk::ListBoxRow::new();
+        let handle = gtk::Button::builder()
+            .icon_name("list-drag-handle-symbolic")
+            .tooltip_text("Drag to reorder")
+            .css_classes(["flat"])
+            .build();
+        let menu_button = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("Row actions")
+            .css_classes(["flat"])
+            .build();
+        let action_row = adw::ActionRow::builder().title(title).build();
+        action_row.add_prefix(&handle);
+        action_row.add_suffix(&menu_button);
+        row.set_child(Some(&action_row));
+
+        let menu = gtk::Popover::new();
+        let menu_content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+        for (label, action) in [
+            ("Move Up", RowAction::MoveUp),
+            ("Move Down", RowAction::MoveDown),
+            ("Remove", RowAction::Remove),
+        ] {
+            let button = gtk::Button::with_label(label);
+            button.set_hexpand(true);
+            button.set_halign(gtk::Align::Fill);
+            let weak_self = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(view) = weak_self.upgrade() {
+                    view.apply_row_action(index, action);
+                }
+            });
+            menu_content.append(&button);
+        }
+        menu.set_child(Some(&menu_content));
+        menu_button.set_popover(Some(&menu));
+
+        let source = gtk::DragSource::builder()
+            .actions(gtk::gdk::DragAction::MOVE)
+            .build();
+        source.connect_prepare(move |_, _, _| {
+            Some(gtk::gdk::ContentProvider::for_value(
+                &(index as u32).to_value(),
+            ))
+        });
+        handle.add_controller(source);
+
+        let target = gtk::DropTarget::new(u32::static_type(), gtk::gdk::DragAction::MOVE);
+        let weak_self = Rc::downgrade(self);
+        target.connect_drop(move |_, value, _, _| {
+            let Some(view) = weak_self.upgrade() else {
+                return false;
+            };
+            let Ok(from) = value.get::<u32>() else {
+                return false;
+            };
+            view.move_file(from as usize, index)
+        });
+        row.add_controller(target);
+        row
+    }
+
+    fn apply_row_action(self: &Rc<Self>, index: usize, action: RowAction) {
+        match action {
+            RowAction::MoveUp => {
+                if let Some(selection) = self
+                    .alignment
+                    .borrow_mut()
+                    .as_mut()
+                    .and_then(|alignment| alignment.move_up(index, index))
+                {
+                    self.refresh_alignment(Some(selection.collect()));
+                }
+            }
+            RowAction::MoveDown => {
+                if let Some(selection) = self
+                    .alignment
+                    .borrow_mut()
+                    .as_mut()
+                    .and_then(|alignment| alignment.move_down(index, index))
+                {
+                    self.refresh_alignment(Some(selection.collect()));
+                }
+            }
+            RowAction::Remove => {
+                if self
+                    .alignment
+                    .borrow_mut()
+                    .as_mut()
+                    .is_some_and(|alignment| alignment.remove(index, index))
+                {
+                    self.refresh_alignment(None);
+                }
+            }
+        }
+    }
+
+    fn move_file(self: &Rc<Self>, from: usize, to: usize) -> bool {
+        let selection = self
             .alignment
             .borrow_mut()
             .as_mut()
-            .and_then(|alignment| movement(alignment, first, last));
+            .and_then(|alignment| alignment.move_file(from, to));
         if let Some(selection) = selection {
-            view.refresh_alignment(Some(selection.collect()));
+            self.refresh_alignment(Some(selection.collect()));
+            true
+        } else {
+            false
         }
-    });
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RowAction {
+    MoveUp,
+    MoveDown,
+    Remove,
 }
 
 fn selected_indices(list: &gtk::ListBox) -> Vec<usize> {

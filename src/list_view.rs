@@ -84,44 +84,19 @@ pub struct DataList {
     pub model: gio::ListStore,
     pub selection: gtk::SelectionModel,
     pub single_selection: Option<gtk::SingleSelection>,
-    pub multi_selection: Option<gtk::MultiSelection>,
 }
 
 impl DataList {
     pub fn new() -> Self {
-        Self::with_selection(SelectionKind::Single)
-    }
-
-    pub fn multi() -> Self {
-        Self::with_selection(SelectionKind::Multiple)
-    }
-
-    pub fn none() -> Self {
-        Self::with_selection(SelectionKind::None)
-    }
-
-    fn with_selection(selection_kind: SelectionKind) -> Self {
         let model = gio::ListStore::new::<DataRow>();
-        let single_selection = match selection_kind {
-            SelectionKind::Single => {
-                let selection = gtk::SingleSelection::new(Some(model.clone()));
-                selection.set_autoselect(false);
-                selection.set_can_unselect(true);
-                Some(selection)
-            }
-            _ => None,
-        };
-        let multi_selection = match selection_kind {
-            SelectionKind::Multiple => Some(gtk::MultiSelection::new(Some(model.clone()))),
-            _ => None,
-        };
-        let selection: gtk::SelectionModel = if let Some(single) = single_selection.as_ref() {
-            single.clone().upcast()
-        } else if let Some(multi) = multi_selection.as_ref() {
-            multi.clone().upcast()
-        } else {
-            gtk::NoSelection::new(Some(model.clone())).upcast()
-        };
+        let single_selection = gtk::SingleSelection::new(Some(model.clone()));
+        single_selection.set_autoselect(false);
+        single_selection.set_can_unselect(true);
+        Self::with_selection(model, single_selection)
+    }
+
+    fn with_selection(model: gio::ListStore, single_selection: gtk::SingleSelection) -> Self {
+        let selection: gtk::SelectionModel = single_selection.clone().upcast();
         let factory = gtk::SignalListItemFactory::new();
         factory.connect_setup(|_, item| {
             let item = item
@@ -158,8 +133,7 @@ impl DataList {
             view,
             model,
             selection,
-            single_selection,
-            multi_selection,
+            single_selection: Some(single_selection),
         }
     }
 
@@ -171,37 +145,9 @@ impl DataList {
         self.model.append(&DataRow::new(title, subtitle));
     }
 
-    pub fn selected_indices(&self) -> Vec<usize> {
-        (0..self.model.n_items())
-            .filter(|index| self.selection.is_selected(*index))
-            .map(|index| index as usize)
-            .collect()
-    }
-
-    pub fn select_indices(&self, indices: &[usize]) {
-        if let Some(selection) = &self.multi_selection {
-            selection.unselect_all();
-            for index in indices {
-                selection.select_item(*index as u32, true);
-            }
-        } else if let Some(index) = indices.first() {
-            self.single_selection
-                .as_ref()
-                .expect("single selection is available")
-                .set_selected(*index as u32);
-        }
-    }
-
     pub fn clear_selection(&self) {
         self.selection.unselect_all();
     }
-}
-
-#[derive(Clone, Copy)]
-enum SelectionKind {
-    Single,
-    Multiple,
-    None,
 }
 
 #[cfg(test)]

@@ -67,6 +67,18 @@ impl BatchAlignment {
         Some(first + 1..=last + 1)
     }
 
+    pub fn move_file(&mut self, from: usize, to: usize) -> Option<RangeInclusive<usize>> {
+        if from == to || !self.valid_file_range(from, from) || to >= self.file_rows.len() {
+            return None;
+        }
+        if from < to {
+            self.file_rows[from..=to].rotate_left(1);
+        } else {
+            self.file_rows[to..=from].rotate_right(1);
+        }
+        Some(from.min(to)..=from.max(to))
+    }
+
     pub fn remove(&mut self, first: usize, last: usize) -> bool {
         if !self.valid_file_range(first, last) {
             return false;
@@ -264,6 +276,24 @@ mod tests {
         assert_eq!(
             matches[0].comic_match.as_ref().unwrap().issue.issue_number,
             "1"
+        );
+    }
+
+    #[test]
+    fn dragging_a_file_to_another_row_reorders_the_file_rows() {
+        let mut alignment = BatchAlignment::new(
+            vec![file("a.cbz"), file("b.cbz"), file("c.cbz")],
+            vec![issue(1, "1"), issue(2, "2"), issue(3, "3")],
+        );
+
+        assert_eq!(alignment.move_file(0, 2), Some(0..=2));
+        assert_eq!(
+            names(&alignment),
+            vec![
+                Some("b.cbz".into()),
+                Some("c.cbz".into()),
+                Some("a.cbz".into())
+            ]
         );
     }
 }

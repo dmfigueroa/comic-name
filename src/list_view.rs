@@ -80,10 +80,11 @@ impl DataRow {
 
 #[derive(Debug)]
 pub struct DataList {
-    pub view: gtk::ListView,
     pub model: gio::ListStore,
     pub selection: gtk::SelectionModel,
     pub single_selection: Option<gtk::SingleSelection>,
+    stack: gtk::Stack,
+    placeholder: gtk::Label,
 }
 
 impl DataList {
@@ -128,13 +129,31 @@ impl DataList {
             .factory(&factory)
             .build();
         view.add_css_class("boxed-list");
+        let placeholder = gtk::Label::builder()
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .margin_top(24)
+            .margin_bottom(24)
+            .margin_start(24)
+            .margin_end(24)
+            .build();
+        placeholder.add_css_class("dim-label");
+        let stack = gtk::Stack::new();
+        stack.add_named(&placeholder, Some("placeholder"));
+        stack.add_named(&view, Some("list"));
+        stack.set_visible_child_name("placeholder");
 
         Self {
-            view,
             model,
             selection,
             single_selection: Some(single_selection),
+            stack,
+            placeholder,
         }
+    }
+
+    pub fn widget(&self) -> gtk::Stack {
+        self.stack.clone()
     }
 
     pub fn clear(&self) {
@@ -143,6 +162,18 @@ impl DataList {
 
     pub fn append(&self, title: &str, subtitle: Option<&str>) {
         self.model.append(&DataRow::new(title, subtitle));
+        self.stack.set_visible_child_name("list");
+    }
+
+    pub fn set_placeholder(&self, text: &str) {
+        self.model.remove_all();
+        self.placeholder.set_text(text);
+        self.stack.set_visible_child_name("placeholder");
+    }
+
+    #[cfg(test)]
+    fn placeholder_text(&self) -> String {
+        self.placeholder.text().to_string()
     }
 
     pub fn clear_selection(&self) {
@@ -171,5 +202,15 @@ mod tests {
             model.item(0).unwrap().property::<String>("subtitle"),
             "DC Comics (2014)"
         );
+    }
+
+    #[test]
+    fn placeholder_state_does_not_add_a_selectable_row() {
+        let list = DataList::new();
+
+        list.set_placeholder("No series found");
+
+        assert_eq!(list.model.n_items(), 0);
+        assert_eq!(list.placeholder_text(), "No series found");
     }
 }

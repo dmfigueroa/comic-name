@@ -21,7 +21,6 @@ pub struct BatchView {
     align_page: adw::NavigationPage,
     review_page: adw::NavigationPage,
     search_entry: gtk::SearchEntry,
-    search_button: gtk::Button,
     series_list: DataList,
     file_list: gtk::ListBox,
     issue_list: gtk::ListBox,
@@ -47,8 +46,6 @@ impl BatchView {
             .hexpand(true)
             .placeholder_text("Search for a ComicVine series")
             .build();
-        let search_button = gtk::Button::builder().label("Search").build();
-        search_button.add_css_class("suggested-action");
         let series_list = DataList::new();
         let file_list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
@@ -83,13 +80,11 @@ impl BatchView {
 
         let choose_content = page_content();
         let search_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
+            .orientation(gtk::Orientation::Vertical)
             .build();
         search_row.append(&search_entry);
-        search_row.append(&search_button);
         choose_content.append(&search_row);
-        choose_content.append(&list_scroller(&series_list.view, 300));
+        choose_content.append(&list_scroller(&series_list.widget(), 300));
 
         let align_content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -174,7 +169,6 @@ impl BatchView {
             align_page: align_shell.page(),
             review_page: review_shell.page(),
             search_entry,
-            search_button,
             series_list,
             file_list,
             issue_list,
@@ -246,14 +240,7 @@ impl BatchView {
 
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
-        self.search_button.connect_clicked(move |_| {
-            if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
-                view.search(&window);
-            }
-        });
-        let weak_self = Rc::downgrade(self);
-        let weak_window = window.downgrade();
-        self.search_entry.connect_activate(move |_| {
+        self.search_entry.connect_search_changed(move |_| {
             if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
                 view.search(&window);
             }
@@ -327,18 +314,21 @@ impl BatchView {
     fn search(self: &Rc<Self>, window: &ComicNameWindow) {
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
-        self.search_button.set_sensitive(false);
         self.volumes.borrow_mut().clear();
         self.selected_volume.replace(None);
         self.alignment.replace(None);
         self.review_button.set_sensitive(false);
         self.rename_button.set_sensitive(false);
-        self.series_list.clear();
-        self.series_list.append("Searching ComicVine...", None);
+        self.series_list.set_placeholder("Searching ComicVine...");
         self.show_unaligned_files();
 
         let api_key = window.api_key();
         let query = self.search_entry.text().to_string();
+        if query.trim().is_empty() {
+            self.series_list
+                .set_placeholder("Type a series name to search");
+            return;
+        }
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = sender.send(comic_vine::search_volumes(&api_key, &query));
@@ -376,20 +366,22 @@ impl BatchView {
     }
 
     fn finish_search(&self, result: anyhow::Result<Vec<Volume>>, window: &ComicNameWindow) {
-        self.search_button.set_sensitive(true);
-        self.series_list.clear();
         match result {
             Ok(volumes) if volumes.is_empty() => {
-                self.series_list.append("No series found", None);
+                self.series_list.set_placeholder("No series found");
             }
             Ok(volumes) => {
+                self.series_list.clear();
                 for volume in &volumes {
                     self.series_list
                         .append(&volume.name, Some(&volume_subtitle(volume)));
                 }
                 self.volumes.replace(volumes);
             }
-            Err(error) => window.show_error(&format!("{error:#}")),
+            Err(error) => {
+                self.series_list.set_placeholder("Search failed");
+                window.show_error(&format!("{error:#}"));
+            }
         }
     }
 

@@ -18,7 +18,6 @@ pub struct SingleView {
     navigation: RefCell<WorkflowNavigation>,
     issue_page: adw::NavigationPage,
     search_entry: gtk::SearchEntry,
-    search_button: gtk::Button,
     series_list: DataList,
     issue_list: DataList,
     file: RefCell<ComicFile>,
@@ -34,8 +33,6 @@ impl SingleView {
             .hexpand(true)
             .placeholder_text("Search for a ComicVine series")
             .build();
-        let search_button = gtk::Button::builder().label("Search").build();
-        search_button.add_css_class("suggested-action");
         let series_list = DataList::new();
         let issue_list = DataList::new();
 
@@ -49,16 +46,14 @@ impl SingleView {
         choose_content.append(&file_label);
 
         let search_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
+            .orientation(gtk::Orientation::Vertical)
             .build();
         search_row.append(&search_entry);
-        search_row.append(&search_button);
         choose_content.append(&search_row);
-        choose_content.append(&list_scroller(&series_list.view, 300));
+        choose_content.append(&list_scroller(&series_list.widget(), 300));
 
         let issue_content = page_content();
-        issue_content.append(&list_scroller(&issue_list.view, 360));
+        issue_content.append(&list_scroller(&issue_list.widget(), 360));
 
         let choose_shell =
             WorkflowPageShell::new("Choose Series", &choose_content, "Open Another Comic");
@@ -72,7 +67,6 @@ impl SingleView {
             navigation: RefCell::new(WorkflowNavigation::single()),
             issue_page: issue_shell.page(),
             search_entry,
-            search_button,
             series_list,
             issue_list,
             file: RefCell::new(file),
@@ -135,14 +129,7 @@ impl SingleView {
 
         let weak_self = Rc::downgrade(self);
         let weak_window = window.downgrade();
-        self.search_button.connect_clicked(move |_| {
-            if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
-                view.search(&window);
-            }
-        });
-        let weak_self = Rc::downgrade(self);
-        let weak_window = window.downgrade();
-        self.search_entry.connect_activate(move |_| {
+        self.search_entry.connect_search_changed(move |_| {
             if let (Some(view), Some(window)) = (weak_self.upgrade(), weak_window.upgrade()) {
                 view.search(&window);
             }
@@ -182,17 +169,20 @@ impl SingleView {
     fn search(self: &Rc<Self>, window: &ComicNameWindow) {
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
-        self.search_button.set_sensitive(false);
         self.volumes.borrow_mut().clear();
         self.issues.borrow_mut().clear();
         self.selected_volume.replace(None);
         self.clear_assignment();
-        self.series_list.clear();
+        self.series_list.set_placeholder("Searching ComicVine...");
         self.issue_list.clear();
-        self.series_list.append("Searching ComicVine...", None);
 
         let api_key = window.api_key();
         let query = self.search_entry.text().to_string();
+        if query.trim().is_empty() {
+            self.series_list
+                .set_placeholder("Type a series name to search");
+            return;
+        }
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = sender.send(comic_vine::search_volumes(&api_key, &query));
@@ -230,20 +220,22 @@ impl SingleView {
     }
 
     fn finish_search(&self, result: anyhow::Result<Vec<Volume>>, window: &ComicNameWindow) {
-        self.search_button.set_sensitive(true);
-        self.series_list.clear();
         match result {
             Ok(volumes) if volumes.is_empty() => {
-                self.series_list.append("No series found", None);
+                self.series_list.set_placeholder("No series found");
             }
             Ok(volumes) => {
+                self.series_list.clear();
                 for volume in &volumes {
                     self.series_list
                         .append(&volume.name, Some(&volume_subtitle(volume)));
                 }
                 self.volumes.replace(volumes);
             }
-            Err(error) => window.show_error(&format!("{error:#}")),
+            Err(error) => {
+                self.series_list.set_placeholder("Search failed");
+                window.show_error(&format!("{error:#}"));
+            }
         }
     }
 
@@ -255,7 +247,7 @@ impl SingleView {
         self.issues.borrow_mut().clear();
         self.clear_assignment();
         self.issue_list.clear();
-        self.issue_list.append("Loading issues...", None);
+        self.issue_list.set_placeholder("Loading issues...");
         let choosing_series = self.navigation.borrow().current() == WorkflowPage::ChooseSeries;
         if choosing_series
             && self.navigation.borrow_mut().advance() == Some(WorkflowPage::ChooseIssue)
@@ -308,12 +300,12 @@ impl SingleView {
     }
 
     fn finish_issues(&self, result: anyhow::Result<Vec<Issue>>, window: &ComicNameWindow) {
-        self.issue_list.clear();
         match result {
             Ok(issues) if issues.is_empty() => {
-                self.issue_list.append("No issues found", None);
+                self.issue_list.set_placeholder("No issues found");
             }
             Ok(issues) => {
+                self.issue_list.clear();
                 for issue in &issues {
                     self.issue_list
                         .append(&issue_title(issue), Some(&issue_subtitle(issue)));
@@ -408,7 +400,7 @@ fn page_content() -> gtk::Box {
         .build()
 }
 
-fn list_scroller(list: &gtk::ListView, minimum_height: i32) -> gtk::ScrolledWindow {
+fn list_scroller<W: IsA<gtk::Widget>>(list: &W, minimum_height: i32) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .min_content_height(minimum_height)
         .vexpand(true)

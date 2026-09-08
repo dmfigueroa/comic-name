@@ -43,8 +43,8 @@
             "buildsystem" : "meson",
             "sources" : [
                 {
-                    "type" : "git",
-                    "url" : "file:///var/home/dfigueroa/Projects"
+                    "type" : "dir",
+                    "path" : "."
                 }
             ]
         }

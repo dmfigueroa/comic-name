@@ -1,9 +1,9 @@
 application_id = 'com.dmfigueroa.ComicName'
 
-scalable_dir = 'hicolor' / 'scalable' / 'apps'
+fixed_size_dir = 'hicolor' / '512x512' / 'apps'
 install_data(
-  scalable_dir / ('@0@.svg').format(application_id),
-  install_dir: get_option('datadir') / 'icons' / scalable_dir
+  fixed_size_dir / ('@0@.png').format(application_id),
+  install_dir: get_option('datadir') / 'icons' / fixed_size_dir
 )
 
 symbolic_dir = 'hicolor' / 'symbolic' / 'apps'

@@ -14,6 +14,8 @@ use crate::list_view::DataList;
 use crate::window::ComicNameWindow;
 use crate::workflow_navigation::{WorkflowNavigation, WorkflowPage, WorkflowPageShell};
 
+const ALIGNMENT_ROW_HEIGHT: i32 = 72;
+
 #[derive(Debug)]
 pub struct BatchView {
     root: adw::NavigationView,
@@ -608,6 +610,7 @@ impl BatchView {
 
     fn file_row(self: &Rc<Self>, index: usize, title: &str) -> gtk::ListBoxRow {
         let row = gtk::ListBoxRow::new();
+        row.set_height_request(ALIGNMENT_ROW_HEIGHT);
         let handle = gtk::Button::builder()
             .icon_name("list-drag-handle-symbolic")
             .tooltip_text("Drag to reorder")
@@ -618,7 +621,10 @@ impl BatchView {
             .tooltip_text("Row actions")
             .css_classes(["flat"])
             .build();
-        let action_row = adw::ActionRow::builder().title(title).build();
+        let action_row = adw::ActionRow::builder()
+            .title(title)
+            .title_lines(1)
+            .build();
         action_row.add_prefix(&handle);
         action_row.add_suffix(&menu_button);
         row.set_child(Some(&action_row));
@@ -802,7 +808,12 @@ fn volume_subtitle(volume: &Volume) -> String {
 
 fn data_row(title: &str, subtitle: Option<&str>) -> adw::ActionRow {
     let title = glib::markup_escape_text(title);
-    let row = adw::ActionRow::builder().title(title).build();
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .title_lines(1)
+        .subtitle_lines(1)
+        .height_request(ALIGNMENT_ROW_HEIGHT)
+        .build();
     if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.is_empty()) {
         row.set_subtitle(&glib::markup_escape_text(subtitle));
     }
@@ -863,5 +874,20 @@ mod tests {
         assert_eq!(removed_files.title(), "Removed files");
         assert!(removed_list.is_ancestor(&removed_files));
         assert!(restore_button.is_ancestor(&removed_files));
+    }
+
+    #[test]
+    fn alignment_data_rows_have_a_fixed_height_for_row_correlation() {
+        if !gtk::is_initialized() {
+            gtk::init().expect("GTK must initialize for this test");
+        }
+
+        let row = data_row(
+            "#3 - Too Many Wars Spoil the Battleship-fund Broth",
+            Some("2024-08-01"),
+        );
+
+        assert_eq!(row.height_request(), ALIGNMENT_ROW_HEIGHT);
+        assert_eq!(row.title_lines(), 1);
     }
 }
